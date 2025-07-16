@@ -1,4 +1,14 @@
+[server]
+port = 13500
+jwt_secret = "supersecretjwtkey"
+hmac_secret = "supersecrethmackey"
+
+[pow]
 difficulty = 5
-token_ttl_secs = 900
-enable_traps = true
-trap_paths = ["/api/internal/stats", "/admin/backup"]
+
+[traps]
+enabled = true
+paths = ["/admin/backup", "/internal/stats"]
+ttl_seconds = 1800
+# token_ttl_secs = 900
+purge_interval = 300

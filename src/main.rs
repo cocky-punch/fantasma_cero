@@ -1,39 +1,35 @@
 use axum::{
     Json, Router,
+    extract::{ConnectInfo, Extension},
     http::StatusCode,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
+use once_cell::sync::Lazy;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::fs;
-use std::time::{SystemTime, UNIX_EPOCH};
+use hmac::{Hmac, Mac};
+use std::{
+    collections::{HashMap, HashSet},
+    net::SocketAddr,
+    sync::{Arc, Mutex},
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
+use jsonwebtoken::{encode, EncodingKey, Header};
 
-fn current_unix_timestamp() -> u64 {
+mod config;
+use config::{Config, CONFIG};
+
+type HmacSha256 = Hmac<Sha256>;
+static TRAP_IPS: Lazy<Arc<Mutex<HashMap<String, u64>>>> =
+    Lazy::new(|| Arc::new(Mutex::new(HashMap::new())));
+
+fn current_unix_ts() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_secs()
-}
-
-#[derive(Debug, Deserialize, Clone)]
-struct Config {
-    difficulty: u8,
-    token_ttl_secs: u64,
-    enable_traps: bool,
-    trap_paths: Vec<String>,
-}
-
-#[derive(Deserialize)]
-struct SolveRequest {
-    salt: String,
-    nonce: u64,
-    difficulty: u8,
-}
-
-fn load_config(path: &str) -> Config {
-    let content = fs::read_to_string(path).expect("Failed to read config file");
-    toml::from_str(&content).expect("Invalid TOML format")
 }
 
 #[derive(Serialize)]
@@ -51,17 +47,17 @@ fn generate_salt() -> String {
         .collect()
 }
 
-async fn challenge_handler(config: axum::extract::Extension<Config>) -> Json<Challenge> {
+async fn challenge_handler(config: axum::extract::Extension<Config>) -> impl IntoResponse {
     let salt = generate_salt();
-    let ts = current_unix_timestamp();
+    let ts = current_unix_ts();
 
     let challenge = Challenge {
         salt,
-        difficulty: config.difficulty,
+        difficulty: config.pow.difficulty,
         timestamp: ts,
     };
 
-    Json(challenge)
+    (StatusCode::OK, Json(challenge))
 }
 
 fn has_leading_zero_bits(hash: &[u8], bits: u8) -> bool {
@@ -85,18 +81,53 @@ fn has_leading_zero_bits(hash: &[u8], bits: u8) -> bool {
     true
 }
 
+#[derive(Deserialize)]
+struct SolveRequest {
+    salt: String,
+    nonce: u64,
+    difficulty: u8,
+}
+
+#[derive(Serialize)]
+struct SolveResponse {
+    jwt: String,
+    hmac_token: String,
+}
+
+#[derive(Serialize)]
+struct Claims {
+    sub: String,
+    exp: usize,
+}
+
 async fn solve_handler(
     Json(payload): Json<SolveRequest>,
-    //TODO
-    // axum::extract::Extension(config): axum::extract::Extension<Arc<Config>>,
-) -> StatusCode {
+) -> impl IntoResponse {
     let input = format!("{}{}", payload.nonce, payload.salt);
     let hash = Sha256::digest(input.as_bytes());
 
     if has_leading_zero_bits(&hash, payload.difficulty) {
-        StatusCode::OK
+        let jwt = encode(
+            &Header::default(),
+            &Claims {
+                sub: "client".to_string(),
+                exp: (current_unix_ts() + 15 * 60) as usize,
+            },
+            &EncodingKey::from_secret(CONFIG.server.jwt_secret.as_bytes()),
+        )
+        .unwrap();
+
+        // let mut mac = HmacSha256::new_from_slice(config.server.hmac_secret.as_bytes()).unwrap();
+        let mut mac = HmacSha256::new_from_slice(CONFIG.server.hmac_secret.as_bytes()).unwrap();
+        mac.update(format!("{}:{}", payload.salt, payload.nonce).as_bytes());
+        let result = mac.finalize().into_bytes();
+        let hmac_token = base64::encode(&result[..]);
+
+        // let response = SolveResponse { jwt, hmac_token };
+        let response = serde_json::json!({ "jwt": jwt, "hmac_token": hmac_token });
+        (StatusCode::OK, Json(response))
     } else {
-        StatusCode::FORBIDDEN
+        (StatusCode::OK, Json(serde_json::json!({ "status": "ok", "hmac_token": null })))
     }
 }
 
@@ -104,15 +135,37 @@ async fn root() -> &'static str {
     "Howdy?"
 }
 
+async fn purge_trap_ips_periodically() {
+    loop {
+        tokio::time::sleep(Duration::from_secs(CONFIG.traps.purge_interval)).await;
+        let now = current_unix_ts();
+        let mut map = TRAP_IPS.lock().unwrap();
+        map.retain(|_, &mut t| now - t < CONFIG.traps.ttl_seconds);
+    }
+}
+
+async fn trap_handler(ConnectInfo(addr): ConnectInfo<SocketAddr>) -> impl IntoResponse {
+    let ip = addr.ip().to_string();
+    let now = current_unix_ts();
+
+    TRAP_IPS.lock().unwrap().insert(ip.clone(), now);
+
+    println!("⚠️ Trap triggered by IP: {ip}");
+
+    // decoy response
+    Json(serde_json::json!({
+        "status": "ok",
+        "data": "nothing to see here"
+    }))
+}
+
 #[tokio::main]
 async fn main() {
-    let config = load_config("config.toml");
-
     let app = Router::new()
         .route("/", get(root))
         .route("/challenge", get(challenge_handler))
         .route("/solve", post(solve_handler))
-        .layer(axum::extract::Extension(config));
+    ;
 
     let server_addr = "0.0.0.0:13050";
     let listener = tokio::net::TcpListener::bind(server_addr).await.unwrap();
