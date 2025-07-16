@@ -1,0 +1,4 @@
+difficulty = 5
+token_ttl_secs = 900
+enable_traps = true
+trap_paths = ["/api/internal/stats", "/admin/backup"]
