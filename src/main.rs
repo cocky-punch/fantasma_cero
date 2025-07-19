@@ -1,25 +1,30 @@
-use axum::{
-    Json, Router,
-    extract::{ConnectInfo, Extension},
-    http::StatusCode,
-    response::{IntoResponse, Response},
-    routing::{get, post},
-};
-use once_cell::sync::Lazy;
-use rand::Rng;
-use serde::{Deserialize, Serialize};
-use sha2::{Digest, Sha256};
-use hmac::{Hmac, Mac};
 use std::{
-    collections::{HashMap, HashSet},
+    collections::HashMap,
     net::SocketAddr,
     sync::{Arc, Mutex},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use jsonwebtoken::{encode, EncodingKey, Header};
+
+use axum::{
+    Json,
+    Router,
+    body::{Body, Bytes},
+    extract::{ConnectInfo, Extension},
+    http::{Request, StatusCode}, //{HeaderMap, HeaderName, HeaderValue}
+    response::{Html, IntoResponse, Response},
+    routing::{get, post},
+};
+
+use hmac::{Hmac, Mac};
+use jsonwebtoken;
+use once_cell::sync::Lazy;
+use rand::Rng;
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 
 mod config;
-use config::{Config, CONFIG};
+use config::{CONFIG, Config};
+mod helpers;
 
 type HmacSha256 = Hmac<Sha256>;
 static TRAP_IPS: Lazy<Arc<Mutex<HashMap<String, u64>>>> =
@@ -94,26 +99,24 @@ struct SolveResponse {
     hmac_token: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct Claims {
     sub: String,
     exp: usize,
 }
 
-async fn solve_handler(
-    Json(payload): Json<SolveRequest>,
-) -> impl IntoResponse {
+async fn solve_handler(Json(payload): Json<SolveRequest>) -> impl IntoResponse {
     let input = format!("{}{}", payload.nonce, payload.salt);
     let hash = Sha256::digest(input.as_bytes());
 
     if has_leading_zero_bits(&hash, payload.difficulty) {
-        let jwt = encode(
-            &Header::default(),
+        let jwt = jsonwebtoken::encode(
+            &jsonwebtoken::Header::default(),
             &Claims {
                 sub: "client".to_string(),
                 exp: (current_unix_ts() + 15 * 60) as usize,
             },
-            &EncodingKey::from_secret(CONFIG.server.jwt_secret.as_bytes()),
+            &jsonwebtoken::EncodingKey::from_secret(CONFIG.server.jwt_secret.as_bytes()),
         )
         .unwrap();
 
@@ -123,11 +126,16 @@ async fn solve_handler(
         let result = mac.finalize().into_bytes();
         let hmac_token = base64::encode(&result[..]);
 
+        //TODO
         // let response = SolveResponse { jwt, hmac_token };
         let response = serde_json::json!({ "jwt": jwt, "hmac_token": hmac_token });
+
         (StatusCode::OK, Json(response))
     } else {
-        (StatusCode::OK, Json(serde_json::json!({ "status": "ok", "hmac_token": null })))
+        (
+            StatusCode::OK,
+            Json(serde_json::json!({ "status": "ok", "hmac_token": null })),
+        )
     }
 }
 
@@ -159,13 +167,118 @@ async fn trap_handler(ConnectInfo(addr): ConnectInfo<SocketAddr>) -> impl IntoRe
     }))
 }
 
+pub async fn proxy_handler(request: Request<Body>) -> impl IntoResponse {
+    use reqwest::Client;
+
+    let (parts, body) = request.into_parts();
+    if let Err(_err) = verify_authorization(&parts.headers) {
+        return Html(helpers::get_challenge_bootstrap_html()).into_response();
+    }
+
+    let body_bytes = match axum::body::to_bytes(body, usize::MAX).await {
+        Ok(bytes) => bytes,
+        Err(_) => return (StatusCode::BAD_REQUEST, "Failed to read request body").into_response(),
+    };
+
+    let target_url = format!(
+        "{}{}",
+        CONFIG.target.origin.trim_end_matches('/'),
+        parts
+            .uri
+            .path_and_query()
+            .map(|pq| pq.as_str())
+            .unwrap_or("/")
+    );
+
+    let client = Client::new();
+    let mut req_builder = client.request(parts.method, &target_url);
+    for (name, value) in &parts.headers {
+        let name_str = name.as_str().to_lowercase();
+        if helpers::is_hop_by_hop_http_header(&name_str) {
+            continue;
+        }
+
+        req_builder = req_builder.header(name, value);
+    }
+
+    if !body_bytes.is_empty() {
+        req_builder = req_builder.body(body_bytes);
+    }
+
+    let response = match req_builder.send().await {
+        Ok(resp) => resp,
+        Err(e) => {
+            eprintln!("Proxy request failed: {}", e);
+            return (StatusCode::BAD_GATEWAY, "Failed to proxy request").into_response();
+        }
+    };
+
+    // response from the target
+    let status = response.status();
+    match response.bytes().await {
+        Ok(bytes) => (status, bytes).into_response(),
+        Err(_) => (StatusCode::BAD_GATEWAY, "Failed to read response").into_response(),
+    }
+}
+
+fn verify_authorization(headers: &axum::http::HeaderMap) -> Result<(), (StatusCode, &str)> {
+    // Extract token from Authorization header (Bearer) or Cookie
+    let maybe_token = headers
+        .get("authorization")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|s| s.strip_prefix("Bearer "))
+        .or_else(|| {
+            headers
+                .get("cookie")
+                .and_then(|h| h.to_str().ok())
+                .and_then(|cookies| extract_token_from_cookie(cookies))
+        });
+
+    let is_valid = match maybe_token {
+        Some(token) => validate_token(token),
+        None => false,
+    };
+
+    if is_valid {
+        Ok(())
+    } else {
+        Err((
+            StatusCode::UNAUTHORIZED,
+            "Invalid or missing authorization token",
+        ))
+    }
+}
+
+fn extract_token_from_cookie(cookies: &str) -> Option<&str> {
+    for cookie in cookies.split(';') {
+        let trimmed = cookie.trim();
+        if let Some(val) = trimmed.strip_prefix("jwt=") {
+            return Some(val);
+        }
+        if let Some(val) = trimmed.strip_prefix("hmac=") {
+            return Some(val);
+        }
+    }
+    None
+}
+
+pub fn validate_token(token: &str) -> bool {
+    let decoding_key = jsonwebtoken::DecodingKey::from_secret(CONFIG.server.jwt_secret.as_bytes());
+    let validation = jsonwebtoken::Validation::default();
+    match jsonwebtoken::decode::<Claims>(token, &decoding_key, &validation) {
+        Ok(_) => true,
+        Err(_) => false,
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let app = Router::new()
         .route("/", get(root))
         .route("/challenge", get(challenge_handler))
-        .route("/solve", post(solve_handler))
-    ;
+        .route("/solve", post(solve_handler));
+
+    tokio::spawn(purge_trap_ips_periodically());
 
     let server_addr = "0.0.0.0:13050";
     let listener = tokio::net::TcpListener::bind(server_addr).await.unwrap();

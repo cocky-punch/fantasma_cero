@@ -1,0 +1,76 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>PoW Client</title>
+    </head>
+    <body>
+        <h1>PoW Verification</h1>
+        <pre id="log"></pre>
+
+        <script>
+            const log = (msg) => {
+                document.getElementById("log").textContent += msg + "\n";
+            };
+
+            async function sha256(text) {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(text);
+                const hashBuffer = await crypto.subtle.digest("SHA-256", data);
+                return Array.from(new Uint8Array(hashBuffer))
+                    .map((b) => b.toString(16).padStart(2, "0"))
+                    .join("");
+            }
+
+            function hasLeadingZeroBits(hex, bits) {
+                const binary = BigInt("0x" + hex)
+                    .toString(2)
+                    .padStart(256, "0");
+                return binary.startsWith("0".repeat(bits));
+            }
+
+            async function solvePoW(salt, difficulty) {
+                let nonce = 0;
+                while (true) {
+                    const input = nonce.toString() + salt;
+                    const hashHex = await sha256(input);
+                    if (hasLeadingZeroBits(hashHex, difficulty)) {
+                        return { nonce, hash: hashHex };
+                    }
+                    nonce++;
+                    if (nonce % 5000 === 0) {
+                        log(`Tried ${nonce} nonces...`);
+                    }
+                }
+            }
+
+            async function run() {
+                log("Requesting challenge...");
+                const challenge = await fetch("/challenge").then((r) => r.json());
+                const { salt } = challenge;
+                const difficulty = 5; // must match backend
+
+                log(`Solving PoW with salt: ${salt} and difficulty: ${difficulty}...`);
+                const { nonce, hash } = await solvePoW(salt, difficulty);
+                log(`Found valid nonce: ${nonce}`);
+                log(`Hash: ${hash}`);
+
+                const solveRes = await fetch("/solve", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ salt, nonce, difficulty }),
+                });
+
+                const tokens = await solveRes.json();
+                log("Received tokens:");
+                log("JWT: " + tokens.jwt);
+                log("HMAC: " + tokens.hmac_token);
+
+                localStorage.setItem("jwt", tokens.jwt);
+                localStorage.setItem("hmac_token", tokens.hmac_token);
+            }
+
+            run();
+        </script>
+    </body>
+</html>

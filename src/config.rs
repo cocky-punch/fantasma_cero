@@ -1,7 +1,7 @@
-use serde::Deserialize;
-use std::{fs, path::Path};
 use once_cell::sync::Lazy;
+use serde::Deserialize;
 use std::sync::Arc;
+use std::{fs, path::Path};
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
@@ -23,10 +23,16 @@ pub struct TrapConfig {
 }
 
 #[derive(Debug, Clone, Deserialize)]
+pub struct TargetConfig {
+    pub origin: String,
+}
+
+#[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
     pub pow: PoWConfig,
     pub traps: TrapConfig,
+    pub target: TargetConfig,
 }
 
 fn load_config<P: AsRef<Path>>(path: P) -> anyhow::Result<Config> {

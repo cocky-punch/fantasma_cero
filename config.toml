@@ -1,7 +1,7 @@
 [server]
 port = 13500
-jwt_secret = "supersecretjwtkey"
-hmac_secret = "supersecrethmackey"
+jwt_secret = "supersecretjwtkey5432543"
+hmac_secret = "supersecrethmackey76545654354"
 
 [pow]
 difficulty = 5
@@ -10,5 +10,7 @@ difficulty = 5
 enabled = true
 paths = ["/admin/backup", "/internal/stats"]
 ttl_seconds = 1800
-# token_ttl_secs = 900
 purge_interval = 300
+
+[target]
+origin = "http://localhost:8080"
