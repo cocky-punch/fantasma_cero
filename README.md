@@ -1,17 +1,16 @@
-# Fantasma Cero
+# Fantasma Cero [WIP]
 
-A web firewall that both scares away and lures those pesky LLM/AI scraper bots. It hits an incoming HTTP request with a quick check — "Are you human, or just another bloody AI scraper in a trench coat?"— before letting it in.
+A web firewall (WAF) that both scares away and lures those pesky LLM/AI scraper bots. It hits an incoming HTTP request with a quick check — "Are you human, or just another bloody AI scraper in a trench coat?"— before letting it in.
 
 
 ## Usage
 
-*Fantasma Cero* being a customizible tool, acts as a lightweight web firewall and reverse proxy. It supports and employs:
-
+Being a customizable tool, *Fantasma Cero*  supports and employs:
 * Proof-of-Work (PoW) challenge
 * HMAC tokens
 * JWT tokens
 * Trap endpoint detection
-* Wrong and decoy content
+* Wrong and decoy content which poisons AI scrapers
 
 Only verified visitors are allowed through to the configured backend.
 

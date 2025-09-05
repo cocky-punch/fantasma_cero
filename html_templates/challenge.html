@@ -1,0 +1,292 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Security Challenge - Waf-1a</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            min-height: 100vh;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 40px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+        h1 { text-align: center; margin-bottom: 30px; }
+        .challenge {
+            background: rgba(0, 0, 0, 0.2);
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+            font-family: monospace;
+            word-break: break-all;
+            font-size: 12px;
+        }
+        .status {
+            margin: 20px 0;
+            padding: 15px;
+            border-radius: 5px;
+            background: rgba(255, 255, 255, 0.1);
+            min-height: 40px;
+        }
+        button {
+            background: #ff6b6b;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+            margin-top: 10px;
+        }
+        button:hover { background: #ff5252; }
+        button:disabled { background: #666; cursor: not-allowed; }
+        .progress-bar {
+            width: 100%;
+            height: 4px;
+            background: rgba(255, 255, 255, 0.2);
+            border-radius: 2px;
+            overflow: hidden;
+            margin: 10px 0;
+        }
+        .progress-fill {
+            height: 100%;
+            background: #4CAF50;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+        .hidden { display: none !important; }
+        .behavioral-info {
+            font-size: 11px;
+            color: rgba(255, 255, 255, 0.7);
+            margin-top: 20px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🛡️ Waf-1a Security Challenge</h1>
+        <p>To protect against automated scrapers and ensure authentic human access, please solve this computational challenge:</p>
+
+        <div class="challenge">
+            <strong>Nonce:</strong> {{ nonce }}<br>
+            <strong>Difficulty:</strong> {{ difficulty }} leading zeros<br>
+            <strong>Expected time:</strong> {{ expected_time }}
+        </div>
+
+        <div class="status" id="status">
+            Click "Start Challenge" to begin. Move your mouse naturally during computation.
+        </div>
+
+        <div class="progress-bar">
+            <div class="progress-fill" id="progress"></div>
+        </div>
+
+        <button id="solveBtn" onclick="solvePow()">Start Challenge</button>
+
+        <!-- Honeypot field -->
+        <input type="text" name="website" class="hidden" id="honeypot" value="">
+
+        <div class="behavioral-info">
+            This challenge analyzes mouse movement patterns and timing to distinguish humans from automated tools.
+        </div>
+
+        <script>
+            let solving = false;
+            let mouseMovements = [];
+            let startTime = 0;
+            let lastProgress = 0;
+
+            // Track mouse movements for behavioral analysis
+            document.addEventListener('mousemove', (e) => {
+                if (solving) {
+                    mouseMovements.push({
+                        x: e.clientX,
+                        y: e.clientY,
+                        timestamp: Date.now()
+                    });
+
+                    // Keep only last 50 movements
+                    if (mouseMovements.length > 50) {
+                        mouseMovements.shift();
+                    }
+                }
+            });
+
+            async function solvePow() {
+                if (solving) return;
+
+                solving = true;
+                startTime = Date.now();
+                mouseMovements = [];
+
+                const btn = document.getElementById('solveBtn');
+                const status = document.getElementById('status');
+                const progress = document.getElementById('progress');
+
+                btn.disabled = true;
+                btn.textContent = 'Computing...';
+                status.textContent = 'Computing proof of work... Move your mouse naturally.';
+
+                const nonce = "{{ nonce }}";
+                const difficulty = {{ difficulty }};
+                let solution = 0;
+                let attempts = 0;
+                const batchSize = 5000;
+
+                async function computeBatch() {
+                    const batchEnd = solution + batchSize;
+
+                    for (let i = solution; i < batchEnd; i++) {
+                        const input = nonce + '-' + i;
+                        const hash = await sha256(input);
+
+                        if (hash.startsWith('0'.repeat(difficulty))) {
+                            const timeElapsed = (Date.now() - startTime) / 1000;
+                            status.textContent = `✅ Solution found! Time: ${timeElapsed.toFixed(1)}s, Attempts: ${i}`;
+                            progress.style.width = '100%';
+
+                            // Submit solution with behavioral data
+                            await submitSolution(nonce, i);
+                            return;
+                        }
+
+                        solution = i + 1;
+                        attempts++;
+                    }
+
+                    // Update progress and status
+                    const timeElapsed = (Date.now() - startTime) / 1000;
+                    const progressPercent = Math.min((attempts / 50000) * 100, 95);
+
+                    if (progressPercent > lastProgress) {
+                        progress.style.width = progressPercent + '%';
+                        lastProgress = progressPercent;
+                    }
+
+                    status.textContent = `Computing... Attempts: ${attempts.toLocaleString()}, Time: ${timeElapsed.toFixed(1)}s`;
+
+                    // Continue with small delay for UI updates
+                    setTimeout(computeBatch, 1);
+                }
+
+                computeBatch();
+            }
+
+            async function submitSolution(nonce, solution) {
+                const timingData = {
+                    totalTime: Date.now() - startTime,
+                    mouseEvents: mouseMovements.length,
+                    screenWidth: screen.width,
+                    screenHeight: screen.height,
+                    userAgent: navigator.userAgent
+                };
+
+                const formData = new URLSearchParams();
+                formData.append('nonce', nonce);
+                formData.append('solution', solution.toString());
+                formData.append('mouse_movements', JSON.stringify(mouseMovements));
+                formData.append('timing_data', JSON.stringify(timingData));
+                formData.append('browser_fingerprint', JSON.stringify({
+                    screen: { width: screen.width, height: screen.height, colorDepth: screen.colorDepth },
+                    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+                    language: navigator.language,
+                    platform: navigator.platform,
+                    cookieEnabled: navigator.cookieEnabled,
+                    doNotTrack: navigator.doNotTrack,
+                    hardwareConcurrency: navigator.hardwareConcurrency || 0,
+                    deviceMemory: navigator.deviceMemory || 0,
+                    canvas: getCanvasFingerprint(),
+                    webgl: getWebGLFingerprint(),
+                    fonts: getAvailableFonts()
+                }));
+                formData.append('honeypot_field', document.getElementById('honeypot').value);
+
+                try {
+                    const response = await fetch('/verify-pow', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                        body: formData
+                    });
+
+                    if (response.ok) {
+                        window.location.reload();
+                    } else {
+                        document.getElementById('status').textContent = 'Verification failed. Please try again.';
+                        document.getElementById('solveBtn').disabled = false;
+                        document.getElementById('solveBtn').textContent = 'Try Again';
+                        solving = false;
+                    }
+                } catch (error) {
+                    document.getElementById('status').textContent = 'Network error. Please try again.';
+                    document.getElementById('solveBtn').disabled = false;
+                    document.getElementById('solveBtn').textContent = 'Try Again';
+                    solving = false;
+                }
+            }
+
+            // Browser fingerprinting functions
+            function getCanvasFingerprint() {
+                try {
+                    const canvas = document.createElement('canvas');
+                    const ctx = canvas.getContext('2d');
+                    ctx.textBaseline = 'top';
+                    ctx.font = '14px Arial';
+                    ctx.fillText('Browser fingerprint test 🔒', 2, 2);
+                    return canvas.toDataURL().slice(-50); // Last 50 chars
+                } catch(e) { return 'error'; }
+            }
+
+            function getWebGLFingerprint() {
+                try {
+                    const canvas = document.createElement('canvas');
+                    const gl = canvas.getContext('webgl') || canvas.getContext('experimental-webgl');
+                    if (!gl) return 'no-webgl';
+
+                    const renderer = gl.getParameter(gl.RENDERER);
+                    const vendor = gl.getParameter(gl.VENDOR);
+                    return `${vendor}-${renderer}`.slice(0, 50);
+                } catch(e) { return 'error'; }
+            }
+
+            function getAvailableFonts() {
+                const fonts = ['Arial', 'Times', 'Courier', 'Helvetica', 'Georgia', 'Verdana'];
+                const available = [];
+
+                fonts.forEach(font => {
+                    const div = document.createElement('div');
+                    div.style.fontFamily = font;
+                    div.style.fontSize = '12px';
+                    div.textContent = 'test';
+                    document.body.appendChild(div);
+
+                    const width = div.offsetWidth;
+                    document.body.removeChild(div);
+
+                    if (width > 0) available.push(font);
+                });
+
+                return available.join(',');
+            }
+
+            // SHA-256 implementation
+            async function sha256(str) {
+                const encoder = new TextEncoder();
+                const data = encoder.encode(str);
+                const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+                const hashArray = Array.from(new Uint8Array(hashBuffer));
+                return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+            }
+        </script>
+    </div>
+</body>
+</html>

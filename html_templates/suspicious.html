@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Suspicious Activity Detected - Waf-1a</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 600px;
+            margin: 100px auto;
+            padding: 20px;
+            background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
+            color: white;
+        }
+        .container {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 40px;
+            border-radius: 10px;
+            backdrop-filter: blur(10px);
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            text-align: center;
+        }
+        .warning {
+            background: rgba(255, 0, 0, 0.2);
+            padding: 20px;
+            border-radius: 5px;
+            margin: 20px 0;
+        }
+        button {
+            background: #4CAF50;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+        }
+        button:hover { background: #45a049; }
+        ul { text-align: left; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>⚠️ Suspicious Activity Detected</h1>
+        <div class="warning">
+            <p><strong>Your session shows unusual patterns:</strong></p>
+            <ul>
+                <li>Suspicious score: {{ suspicion_score }}/100</li>
+                <li>Possible cookie sharing detected</li>
+                <li>Multiple concurrent sessions</li>
+                <li>Changed device characteristics</li>
+            </ul>
+        </div>
+
+        <p>Your access is still granted, but please note:</p>
+        <ul>
+            <li>Don't share your authentication cookies</li>
+            <li>Use consistent browsers/devices</li>
+            <li>Avoid automated tools</li>
+        </ul>
+
+        <p><strong>If this continues, your access may be revoked.</strong></p>
+
+        <form method="GET" action="/">
+            <button type="submit">Continue to Site</button>
+        </form>
+    </div>
+</body>
+</html>
