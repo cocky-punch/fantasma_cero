@@ -655,9 +655,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/", get(main_handler))
         .route("/verify-pow", post(verify_pow))
         .route("/health", get(health_check))
+
+        //TODO: add auth
         .route("/admin/stats", get(admin_stats))
+
+        //TODO from config, dynamically
         .route("/secret-admin-link", get(honeypot_route))
         .route("/wp-admin", get(honeypot_route))
+
+        //
         .route("/robots.txt", get(robots_txt))
         .layer(ServiceBuilder::new().layer(CorsLayer::permissive()))
         .with_state(state);
