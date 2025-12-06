@@ -1,9 +1,9 @@
 use axum::{
-    extract::{Query, State},
-    http::{header, HeaderMap, HeaderValue, StatusCode},
+    Router,
+    extract::{Form, Query, State},
+    http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
-    Router,
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -13,13 +13,12 @@ use std::{
     sync::{Arc, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
-use tera::{Tera, Context};
+use tera::{Context, Tera};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
-use uuid::Uuid;
 use tracing_subscriber;
-
+use uuid::Uuid;
 
 const COOKIE_NAME: &str = "waf1a_verified";
 const COOKIE_DURATION_DAYS: u64 = 14;
@@ -28,7 +27,7 @@ const MAX_REQUESTS_PER_WINDOW: u32 = 10;
 const BASE_DIFFICULTY: u32 = 4;
 const MAX_DIFFICULTY: u32 = 7;
 const DEFAULT_TARGET_URL: &'static str = "example.com";
-
+const SUSPICION_THRESHOLD: u32 = 40;
 
 #[derive(Clone)]
 struct AppState {
@@ -104,7 +103,7 @@ struct PoWSubmission {
 
 impl AppState {
     fn new(target_url: String) -> Result<Self, Box<dyn std::error::Error>> {
-        let mut tera = Tera::new("templates/**/*")?;
+        let mut tera = Tera::new("html_templates/**/*")?;
         tera.autoescape_on(vec!["html"]);
 
         Ok(Self {
@@ -193,9 +192,10 @@ impl AppState {
             behavior.suspicious_score += 10;
         }
 
-        if user_agent.to_lowercase().contains("bot") ||
-           user_agent.to_lowercase().contains("spider") ||
-           user_agent.to_lowercase().contains("crawl") {
+        if user_agent.to_lowercase().contains("bot")
+            || user_agent.to_lowercase().contains("spider")
+            || user_agent.to_lowercase().contains("crawl")
+        {
             behavior.suspicious_score += 20;
         }
 
@@ -286,7 +286,13 @@ impl AppState {
         }
     }
 
-    fn is_verified_by_cookie(&self, cookie_value: &str, ip: IpAddr, user_agent: &str, tls_fp: &str) -> (bool, u32) {
+    fn is_verified_by_cookie(
+        &self,
+        cookie_value: &str,
+        ip: IpAddr,
+        user_agent: &str,
+        tls_fp: &str,
+    ) -> (bool, u32) {
         let mut verified = self.verified_tokens.write().unwrap();
 
         if let Some(client) = verified.get_mut(cookie_value) {
@@ -320,7 +326,8 @@ impl AppState {
                 suspicion_added += 50;
             }
 
-            let concurrent_suspicion = self.check_concurrent_usage(cookie_value, ip, user_agent, tls_fp);
+            let concurrent_suspicion =
+                self.check_concurrent_usage(cookie_value, ip, user_agent, tls_fp);
             suspicion_added += concurrent_suspicion;
 
             client.suspicious_score += suspicion_added;
@@ -337,7 +344,13 @@ impl AppState {
         }
     }
 
-    fn check_concurrent_usage(&self, token: &str, ip: IpAddr, user_agent: &str, tls_fp: &str) -> u32 {
+    fn check_concurrent_usage(
+        &self,
+        token: &str,
+        ip: IpAddr,
+        user_agent: &str,
+        tls_fp: &str,
+    ) -> u32 {
         let mut concurrent = self.concurrent_usage.write().unwrap();
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -350,7 +363,10 @@ impl AppState {
 
         let mut found_session = false;
         for session in sessions.iter_mut() {
-            if session.ip == ip && session.user_agent == user_agent && session.tls_fingerprint == tls_fp {
+            if session.ip == ip
+                && session.user_agent == user_agent
+                && session.tls_fingerprint == tls_fp
+            {
                 session.last_request = now;
                 session.request_count += 1;
                 found_session = true;
@@ -377,7 +393,13 @@ impl AppState {
         }
     }
 
-    fn create_verified_token(&self, ip: IpAddr, user_agent: &str, tls_fp: &str, browser_fp: &str) -> String {
+    fn create_verified_token(
+        &self,
+        ip: IpAddr,
+        user_agent: &str,
+        tls_fp: &str,
+        browser_fp: &str,
+    ) -> String {
         let token = Uuid::new_v4().to_string();
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -483,16 +505,14 @@ fn extract_cookie_value(headers: &HeaderMap, cookie_name: &str) -> Option<String
         .get(header::COOKIE)
         .and_then(|v| v.to_str().ok())
         .and_then(|cookies| {
-            cookies
-                .split(';')
-                .find_map(|cookie| {
-                    let parts: Vec<&str> = cookie.trim().splitn(2, '=').collect();
-                    if parts.len() == 2 && parts[0] == cookie_name {
-                        Some(parts[1].to_string())
-                    } else {
-                        None
-                    }
-                })
+            cookies.split(';').find_map(|cookie| {
+                let parts: Vec<&str> = cookie.trim().splitn(2, '=').collect();
+                if parts.len() == 2 && parts[0] == cookie_name {
+                    Some(parts[1].to_string())
+                } else {
+                    None
+                }
+            })
         })
 }
 
@@ -506,36 +526,26 @@ fn render_template(templates: &Tera, template_name: &str, context: &Context) -> 
     }
 }
 
-async fn main_handler(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn main_handler(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let client_ip = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
     let tls_fingerprint = get_tls_fingerprint(&headers);
 
     if state.is_ip_blocked(client_ip) {
         let mut context = Context::new();
-        context.insert("message", "Your IP has been blocked due to suspicious activity.");
+        context.insert(
+            "message",
+            "Your IP has been blocked due to suspicious activity.",
+        );
         return render_template(&state.templates, "blocked.html", &context);
     }
 
-    if !state.check_rate_limit(client_ip) {
-        let mut context = Context::new();
-        context.insert("message", "Too many requests. Please try again later.");
-        return render_template(&state.templates, "rate_limited.html", &context);
-    }
-
     if let Some(cookie_value) = extract_cookie_value(&headers, COOKIE_NAME) {
-        let (is_valid, suspicion_score) = state.is_verified_by_cookie(
-            &cookie_value,
-            client_ip,
-            &user_agent,
-            &tls_fingerprint
-        );
+        let (is_valid, suspicion_score) =
+            state.is_verified_by_cookie(&cookie_value, client_ip, &user_agent, &tls_fingerprint);
 
         if is_valid {
-            if suspicion_score > 40 {
+            if suspicion_score > SUSPICION_THRESHOLD {
                 let mut context = Context::new();
                 context.insert("suspicion_score", &suspicion_score);
                 return render_template(&state.templates, "suspicious.html", &context);
@@ -550,6 +560,12 @@ async fn main_handler(
         }
     }
 
+    if !state.check_rate_limit(client_ip) {
+        let mut context = Context::new();
+        context.insert("message", "Too many requests. Please try again later.");
+        return render_template(&state.templates, "rate_limited.html", &context);
+    }
+
     let challenge = state.generate_challenge(client_ip, &user_agent);
     let mut context = Context::new();
     context.insert("nonce", &challenge.nonce);
@@ -562,7 +578,7 @@ async fn main_handler(
 async fn verify_pow(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Query(params): Query<PoWSubmission>,
+    Form(params): Form<PoWSubmission>,
 ) -> impl IntoResponse {
     let client_ip = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
@@ -570,7 +586,8 @@ async fn verify_pow(
 
     if state.verify_pow(&params.nonce, params.solution, &params) {
         let browser_fp = params.browser_fingerprint.as_deref().unwrap_or("unknown");
-        let token = state.create_verified_token(client_ip, &user_agent, &tls_fingerprint, browser_fp);
+        let token =
+            state.create_verified_token(client_ip, &user_agent, &tls_fingerprint, browser_fp);
 
         let cookie_value = format!(
             "{}={}; Path=/; Max-Age={}; HttpOnly; Secure; SameSite=Strict",
@@ -592,10 +609,7 @@ async fn verify_pow(
     }
 }
 
-async fn honeypot_route(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-) -> impl IntoResponse {
+async fn honeypot_route(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let client_ip = get_client_ip(&headers);
     state.record_honeypot_hit(client_ip);
 
@@ -623,10 +637,17 @@ async fn admin_stats(State(state): State<AppState>) -> impl IntoResponse {
         ip_tracking.len(),
         verified_tokens.len(),
         honeypots.len(),
-        ip_tracking.values().map(|b| b.suspicious_score).sum::<u32>()
+        ip_tracking
+            .values()
+            .map(|b| b.suspicious_score)
+            .sum::<u32>()
     );
 
-    (StatusCode::OK, [("content-type", "application/json")], stats)
+    (
+        StatusCode::OK,
+        [("content-type", "application/json")],
+        stats,
+    )
 }
 
 async fn robots_txt() -> impl IntoResponse {
@@ -639,9 +660,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // tracing_subscriber::init();
     tracing_subscriber::fmt::init();
 
-    let target_url: String = std::env::var("TARGET_URL")
-        .unwrap_or_else(|_| format!("https://{}", DEFAULT_TARGET_URL));
-
+    let target_url: String =
+        std::env::var("TARGET_URL").unwrap_or_else(|_| format!("https://{}", DEFAULT_TARGET_URL));
 
     let state = match AppState::new(target_url) {
         Ok(state) => state,
@@ -655,14 +675,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .route("/", get(main_handler))
         .route("/verify-pow", post(verify_pow))
         .route("/health", get(health_check))
-
         //TODO: add auth
         .route("/admin/stats", get(admin_stats))
-
         //TODO from config, dynamically
         .route("/secret-admin-link", get(honeypot_route))
         .route("/wp-admin", get(honeypot_route))
-
         //
         .route("/robots.txt", get(robots_txt))
         .layer(ServiceBuilder::new().layer(CorsLayer::permissive()))
@@ -672,13 +689,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = format!("0.0.0.0:{}", port);
 
     println!("🛡️ Waf-1a Enhanced starting on {}", addr);
-    println!("Target URL: {}",
-        std::env::var("TARGET_URL").unwrap_or_else(|_|  format!("https://{}", DEFAULT_TARGET_URL)));
+    println!(
+        "Target URL: {}",
+        std::env::var("TARGET_URL").unwrap_or_else(|_| format!("https://{}", DEFAULT_TARGET_URL))
+    );
     println!("Features enabled:");
     println!("  - Dynamic PoW difficulty (base: {})", BASE_DIFFICULTY);
     println!("  - Cookie-based tracking (14 days)");
     println!("  - Behavioral analysis & honeypots");
-    println!("  - Rate limiting ({} req/{}min)", MAX_REQUESTS_PER_WINDOW, RATE_LIMIT_WINDOW_MINUTES);
+    println!(
+        "  - Rate limiting ({} req/{}min)",
+        MAX_REQUESTS_PER_WINDOW, RATE_LIMIT_WINDOW_MINUTES
+    );
     println!("  - IP reputation tracking");
     println!("Admin stats: http://localhost:{}/admin/stats", port);
 
