@@ -19,6 +19,7 @@ use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber;
 use uuid::Uuid;
+use serde_json::Value;
 
 const COOKIE_NAME: &str = "waf1a_verified";
 const COOKIE_DURATION_DAYS: u64 = 14;
@@ -292,6 +293,7 @@ impl AppState {
         ip: IpAddr,
         user_agent: &str,
         tls_fp: &str,
+        browser_fp: &str, // Current browser fingerprint
     ) -> (bool, u32) {
         let mut verified = self.verified_tokens.write().unwrap();
 
@@ -324,6 +326,22 @@ impl AppState {
 
             if !client.tls_fingerprint.is_empty() && client.tls_fingerprint != tls_fp {
                 suspicion_added += 50;
+            }
+
+            // Browser fingerprint - FUZZY COMPARISON
+            if !client.browser_fingerprint.is_empty() && !browser_fp.is_empty() {
+                let fp_suspicion =
+                    compare_browser_fingerprints(&client.browser_fingerprint, browser_fp);
+                suspicion_added += fp_suspicion;
+
+                // Log significant fingerprint changes
+                if fp_suspicion > 20 {
+                    eprintln!(
+                        "Significant browser fingerprint change for token {}: +{} suspicion",
+                        &cookie_value[..8], // First 8 chars of token
+                        fp_suspicion
+                    );
+                }
             }
 
             let concurrent_suspicion =
@@ -526,10 +544,95 @@ fn render_template(templates: &Tera, template_name: &str, context: &Context) -> 
     }
 }
 
+// Add this helper function
+fn compare_browser_fingerprints(stored: &str, current: &str) -> u32 {
+    // Parse both fingerprints
+    let stored_fp: Result<Value, _> = serde_json::from_str(stored);
+    let current_fp: Result<Value, _> = serde_json::from_str(current);
+
+    if stored_fp.is_err() || current_fp.is_err() {
+        return 0; // Can't compare, no penalty
+    }
+
+    let stored = stored_fp.unwrap();
+    let current = current_fp.unwrap();
+
+    let mut suspicion = 0;
+
+    // Critical unchangeable characteristics (high suspicion if different)
+
+    // Canvas fingerprint - very stable, hardware-specific
+    if stored.get("canvas") != current.get("canvas") {
+        suspicion += 30; // High - indicates different GPU/rendering
+    }
+
+    // WebGL fingerprint - hardware-specific
+    if stored.get("webgl") != current.get("webgl") {
+        suspicion += 30; // High - indicates different graphics card
+    }
+
+    // Platform - OS shouldn't change often
+    if stored.get("platform") != current.get("platform") {
+        suspicion += 25; // High - different OS
+    }
+
+    // Medium-stability characteristics (moderate suspicion)
+
+    // Screen resolution - can change but uncommon
+    if let (Some(stored_screen), Some(current_screen)) =
+        (stored.get("screen"), current.get("screen"))
+    {
+        if stored_screen.get("width") != current_screen.get("width")
+            || stored_screen.get("height") != current_screen.get("height")
+        {
+            suspicion += 10; // Moderate - monitor change or window resize
+        }
+
+        if stored_screen.get("colorDepth") != current_screen.get("colorDepth") {
+            suspicion += 15; // Moderate-high - unusual to change
+        }
+    }
+
+    // Hardware concurrency - CPU cores, rarely changes
+    if stored.get("hardwareConcurrency") != current.get("hardwareConcurrency") {
+        suspicion += 15; // Different CPU
+    }
+
+    // Available fonts - relatively stable
+    if stored.get("fonts") != current.get("fonts") {
+        suspicion += 8; // Minor - fonts can be installed/removed
+    }
+
+    // Low-stability characteristics (low/no suspicion - expected to change)
+
+    // Timezone - ALLOWED TO CHANGE (travel, DST, manual change)
+    // No penalty
+
+    // Language - ALLOWED TO CHANGE (user preference)
+    // No penalty
+
+    // Device memory - ALLOWED TO CHANGE (RAM upgrade)
+    // No penalty
+
+    // Cookie enabled - browser setting, can change
+    // No penalty
+
+    // DoNotTrack - privacy setting, can change
+    // No penalty
+
+    suspicion
+}
+
 async fn main_handler(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
     let client_ip = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
     let tls_fingerprint = get_tls_fingerprint(&headers);
+
+    // Try to get browser fingerprint from custom header (if provided)
+    let browser_fp = headers
+        .get("x-browser-fingerprint")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
 
     if state.is_ip_blocked(client_ip) {
         let mut context = Context::new();
@@ -541,8 +644,13 @@ async fn main_handler(State(state): State<AppState>, headers: HeaderMap) -> impl
     }
 
     if let Some(cookie_value) = extract_cookie_value(&headers, COOKIE_NAME) {
-        let (is_valid, suspicion_score) =
-            state.is_verified_by_cookie(&cookie_value, client_ip, &user_agent, &tls_fingerprint);
+        let (is_valid, suspicion_score) = state.is_verified_by_cookie(
+            &cookie_value,
+            client_ip,
+            &user_agent,
+            &tls_fingerprint,
+            &browser_fp,
+        );
 
         if is_valid {
             if suspicion_score > SUSPICION_THRESHOLD {
