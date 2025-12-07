@@ -21,8 +21,10 @@ use tracing_subscriber;
 use uuid::Uuid;
 use serde_json::Value;
 
+mod helpers;
+
 const COOKIE_NAME: &str = "waf1a_verified";
-const COOKIE_DURATION_DAYS: u64 = 14;
+const COOKIE_DURATION_DAYS: u64 = 7;
 const RATE_LIMIT_WINDOW_MINUTES: u64 = 15;
 const MAX_REQUESTS_PER_WINDOW: u32 = 10;
 const BASE_DIFFICULTY: u32 = 4;
@@ -293,71 +295,132 @@ impl AppState {
         ip: IpAddr,
         user_agent: &str,
         tls_fp: &str,
-        browser_fp: &str, // Current browser fingerprint
+        browser_fp: &str,
     ) -> (bool, u32) {
+        let token_preview = &cookie_value[..std::cmp::min(8, cookie_value.len())];
+
+        eprintln!("[COOKIE_VERIFY] Token: {}... | IP: {} | UA: {}",
+            token_preview, ip, &user_agent[..std::cmp::min(50, user_agent.len())]);
+
         let mut verified = self.verified_tokens.write().unwrap();
 
         if let Some(client) = verified.get_mut(cookie_value) {
+            eprintln!("✅ [COOKIE_VERIFY] Token found in verified_tokens");
+
             let now = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap()
                 .as_secs();
 
+            let age_days = (now - client.created_at) / (24 * 3600);
+            eprintln!("[COOKIE_VERIFY] Token age: {} days (max: {})", age_days, COOKIE_DURATION_DAYS);
+
             if now - client.created_at > COOKIE_DURATION_DAYS * 24 * 3600 {
+                eprintln!("❌ [COOKIE_VERIFY] Token expired");
                 return (false, 0);
             }
 
             let mut suspicion_added = 0;
+            eprintln!("[COOKIE_VERIFY] Starting suspicion check | Current score: {}", client.suspicious_score);
 
+            // IP check
             if client.ip != ip {
                 client.ip_changes += 1;
+                eprintln!("[IP_CHANGE] {} -> {} | Total changes: {}",
+                    client.ip, ip, client.ip_changes);
+
                 if client.ip_changes > 3 {
                     suspicion_added += 30;
+                    eprintln!("⚠️  [IP_CHANGE] Exceeded threshold! +30 suspicion");
                 }
                 client.ip = ip;
+            } else {
+                eprintln!("✓ [IP_CHECK] IP unchanged: {}", ip);
             }
 
+            // User agent check
             if client.user_agent != user_agent {
                 client.user_agent_changes += 1;
+                eprintln!("[USER_AGENT_CHANGE] Old: {} | New: {} | Total changes: {}",
+                    &client.user_agent[..std::cmp::min(40, client.user_agent.len())],
+                    &user_agent[..std::cmp::min(40, user_agent.len())],
+                    client.user_agent_changes);
+
                 if client.user_agent_changes > 2 {
                     suspicion_added += 40;
+                    eprintln!("⚠️ [USER_AGENT] Exceeded threshold! +40 suspicion");
                 }
+            } else {
+                eprintln!("✓ [USER_AGENT_CHECK] User-Agent unchanged");
             }
 
+            // TLS fingerprint check
             if !client.tls_fingerprint.is_empty() && client.tls_fingerprint != tls_fp {
                 suspicion_added += 50;
+                eprintln!("[TLS_CHANGE] Old: {} | New: {} | +50 suspicion",
+                    &client.tls_fingerprint[..std::cmp::min(16, client.tls_fingerprint.len())],
+                    &tls_fp[..std::cmp::min(16, tls_fp.len())]);
+            } else if !client.tls_fingerprint.is_empty() {
+                eprintln!("✓ [TLS_CHECK] TLS fingerprint unchanged");
+            } else {
+                eprintln!("ℹ️  [TLS_CHECK] No stored TLS fingerprint");
             }
 
             // Browser fingerprint - FUZZY COMPARISON
             if !client.browser_fingerprint.is_empty() && !browser_fp.is_empty() {
+                eprintln!("[FP_CHECK] Comparing browser fingerprints...");
                 let fp_suspicion =
                     compare_browser_fingerprints(&client.browser_fingerprint, browser_fp);
-                suspicion_added += fp_suspicion;
 
-                // Log significant fingerprint changes
+                if fp_suspicion > 0 {
+                    eprintln!("⚠️  [FP_CHANGE] Browser fingerprint differences detected: +{} suspicion", fp_suspicion);
+                    suspicion_added += fp_suspicion;
+                } else {
+                    eprintln!("✓ [FP_CHECK] Browser fingerprint matches");
+                }
+
                 if fp_suspicion > 20 {
                     eprintln!(
-                        "Significant browser fingerprint change for token {}: +{} suspicion",
-                        &cookie_value[..8], // First 8 chars of token
+                        "🚨 [FP_ALERT] Significant browser fingerprint change for token {}: +{} suspicion",
+                        token_preview,
                         fp_suspicion
                     );
                 }
+            } else if client.browser_fingerprint.is_empty() {
+                eprintln!("ℹ️  [FP_CHECK] No stored browser fingerprint");
+            } else if browser_fp.is_empty() {
+                eprintln!("ℹ️  [FP_CHECK] No current browser fingerprint provided");
             }
 
+            // Concurrent usage check
+            eprintln!("[CONCURRENT] Checking concurrent sessions...");
             let concurrent_suspicion =
                 self.check_concurrent_usage(cookie_value, ip, user_agent, tls_fp);
+
+            if concurrent_suspicion > 0 {
+                eprintln!("⚠️  [CONCURRENT] Multiple sessions detected: +{} suspicion", concurrent_suspicion);
+            } else {
+                eprintln!("✓ [CONCURRENT] Single session detected");
+            }
             suspicion_added += concurrent_suspicion;
 
+            // Update client state
             client.suspicious_score += suspicion_added;
             client.last_seen = now;
             client.request_count += 1;
 
+            eprintln!("[SUMMARY] Added: {} | Total score: {} | Requests: {}",
+                suspicion_added, client.suspicious_score, client.request_count);
+
             if client.suspicious_score > 80 {
+                eprintln!("🚫 [BLOCKED] Suspicion score {} exceeds threshold of 80", client.suspicious_score);
                 return (false, client.suspicious_score);
             }
 
+            eprintln!("✅ [ALLOWED] Cookie verified | Score: {} | Status: OK\n", client.suspicious_score);
             (true, client.suspicious_score)
         } else {
+            eprintln!("❌ [COOKIE_VERIFY] Token not found in verified_tokens\n");
             (false, 0)
         }
     }
@@ -484,28 +547,89 @@ fn get_client_ip(headers: &HeaderMap) -> IpAddr {
     "127.0.0.1".parse().unwrap()
 }
 
+
+
 fn get_tls_fingerprint(headers: &HeaderMap) -> String {
     let mut fingerprint_parts = Vec::new();
 
-    if let Some(accept) = headers.get("accept") {
-        if let Ok(s) = accept.to_str() {
-            fingerprint_parts.push(s);
+    // Try Client Hints first (Chromium only)
+    let has_client_hints = headers.contains_key("sec-ch-ua");
+
+    if has_client_hints {
+        // Chromium-based browsers - use stable Client Hints
+        if let Some(ua) = headers.get("sec-ch-ua") {
+            if let Ok(s) = ua.to_str() {
+                fingerprint_parts.push(format!("ch-ua:{}", s));
+            }
+        }
+
+        if let Some(platform) = headers.get("sec-ch-ua-platform") {
+            if let Ok(s) = platform.to_str() {
+                fingerprint_parts.push(format!("ch-platform:{}", s));
+            }
+        }
+
+        if let Some(mobile) = headers.get("sec-ch-ua-mobile") {
+            if let Ok(s) = mobile.to_str() {
+                fingerprint_parts.push(format!("ch-mobile:{}", s));
+            }
         }
     }
 
-    if let Some(accept_encoding) = headers.get("accept-encoding") {
-        if let Ok(s) = accept_encoding.to_str() {
-            fingerprint_parts.push(s);
+    // Always include User-Agent (universal fallback)
+    if let Some(user_agent) = headers.get("user-agent") {
+        if let Ok(s) = user_agent.to_str() {
+            // Normalize: extract browser name and major version only
+            // This makes fingerprint stable across minor updates
+            let normalized = helpers::normalize_user_agent(s);
+            fingerprint_parts.push(format!("ua:{}", normalized));
         }
     }
 
-    if let Some(accept_language) = headers.get("accept-language") {
-        if let Ok(s) = accept_language.to_str() {
-            fingerprint_parts.push(s);
+    // Accept-Encoding is quite stable (gzip, deflate, br)
+    if let Some(encoding) = headers.get("accept-encoding") {
+        if let Ok(s) = encoding.to_str() {
+            // Sort to handle order variations
+            let mut encodings: Vec<&str> = s.split(',').map(|e| e.trim()).collect();
+            encodings.sort();
+            fingerprint_parts.push(format!("enc:{}", encodings.join(",")));
         }
+    }
+
+    if fingerprint_parts.is_empty() {
+        return String::new();
     }
 
     let combined = fingerprint_parts.join("|");
+    let hash = Sha256::digest(combined.as_bytes());
+    hex::encode(hash)[..16].to_string()
+}
+
+//more relaxed
+fn get_tls_fingerprint2(headers: &HeaderMap) -> String {
+    let mut parts = Vec::new();
+
+    // Normalized User-Agent (browser + major version + OS)
+    if let Some(ua) = headers.get("user-agent") {
+        if let Ok(s) = ua.to_str() {
+            parts.push(helpers::normalize_user_agent(s));
+        }
+    }
+
+    // Accept-Encoding (stable compression support)
+    if let Some(enc) = headers.get("accept-encoding") {
+        if let Ok(s) = enc.to_str() {
+            let mut encodings: Vec<&str> = s.split(',').map(|e| e.trim()).collect();
+            encodings.sort();
+            parts.push(encodings.join(","));
+        }
+    }
+
+    if parts.is_empty() {
+        return String::new();
+    }
+
+    let combined = parts.join("|");
     let hash = Sha256::digest(combined.as_bytes());
     hex::encode(hash)[..16].to_string()
 }
@@ -796,14 +920,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let addr = format!("0.0.0.0:{}", port);
 
-    println!("🛡️ Waf-1a Enhanced starting on {}", addr);
+    println!("Waf-1a Enhanced starting on {}", addr);
     println!(
         "Target URL: {}",
         std::env::var("TARGET_URL").unwrap_or_else(|_| format!("https://{}", DEFAULT_TARGET_URL))
     );
     println!("Features enabled:");
     println!("  - Dynamic PoW difficulty (base: {})", BASE_DIFFICULTY);
-    println!("  - Cookie-based tracking (14 days)");
+    println!("  - Cookie-based tracking ({} days)", COOKIE_DURATION_DAYS);
     println!("  - Behavioral analysis & honeypots");
     println!(
         "  - Rate limiting ({} req/{}min)",
