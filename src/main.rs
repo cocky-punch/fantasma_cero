@@ -851,7 +851,7 @@ async fn honeypot_route(State(state): State<AppState>, headers: HeaderMap) -> im
 }
 
 async fn health_check() -> impl IntoResponse {
-    "Waf-1a is running"
+    "Fantasma One is running"
 }
 
 async fn admin_stats(State(state): State<AppState>) -> impl IntoResponse {
@@ -920,7 +920,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
     let addr = format!("0.0.0.0:{}", port);
 
-    println!("Waf-1a Enhanced starting on {}", addr);
+    println!("Fantasma One Enhanced starting on {}", addr);
     println!(
         "Target URL: {}",
         std::env::var("TARGET_URL").unwrap_or_else(|_| format!("https://{}", DEFAULT_TARGET_URL))

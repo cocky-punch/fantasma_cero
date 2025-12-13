@@ -1,55 +1,59 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-<head>
-    <title>Access Revoked - Waf-1a</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 600px;
-            margin: 100px auto;
-            padding: 20px;
-            background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
-            color: white;
-        }
-        .container {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 40px;
-            border-radius: 10px;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            text-align: center;
-        }
-        button {
-            background: #ff6b6b;
-            color: white;
-            border: none;
-            padding: 12px 24px;
-            border-radius: 5px;
-            cursor: pointer;
-            font-size: 16px;
-        }
-        button:hover { background: #ff5252; }
-        ul { text-align: left; }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>🚫 Access Revoked</h1>
-        <p>Your authentication cookie has been invalidated due to suspicious activity:</p>
+    <head>
+        <title>Access Revoked - Fantasma One</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                max-width: 600px;
+                margin: 100px auto;
+                padding: 20px;
+                background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
+                color: white;
+            }
+            .container {
+                background: rgba(255, 255, 255, 0.1);
+                padding: 40px;
+                border-radius: 10px;
+                backdrop-filter: blur(10px);
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+                text-align: center;
+            }
+            button {
+                background: #ff6b6b;
+                color: white;
+                border: none;
+                padding: 12px 24px;
+                border-radius: 5px;
+                cursor: pointer;
+                font-size: 16px;
+            }
+            button:hover {
+                background: #ff5252;
+            }
+            ul {
+                text-align: left;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>🚫 Access Revoked</h1>
+            <p>Your authentication cookie has been invalidated due to suspicious activity:</p>
 
-        <ul>
-            <li>Suspicious score exceeded threshold: {{ suspicion_score }}/100</li>
-            <li>Detected cookie sharing or automated access</li>
-            <li>Multiple concurrent sessions from different devices</li>
-            <li>Inconsistent browser fingerprints</li>
-        </ul>
+            <ul>
+                <li>Suspicious score exceeded threshold: {{ suspicion_score }}/100</li>
+                <li>Detected cookie sharing or automated access</li>
+                <li>Multiple concurrent sessions from different devices</li>
+                <li>Inconsistent browser fingerprints</li>
+            </ul>
 
-        <p><strong>To regain access, you must complete a new security challenge.</strong></p>
+            <p><strong>To regain access, you must complete a new security challenge.</strong></p>
 
-        <form method="GET" action="/">
-            <button type="submit">Start New Challenge</button>
-        </form>
-    </div>
-</body>
+            <form method="GET" action="/">
+                <button type="submit">Start New Challenge</button>
+            </form>
+        </div>
+    </body>
 </html>
