@@ -6,6 +6,7 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
@@ -19,11 +20,10 @@ use tower::ServiceBuilder;
 use tower_http::cors::CorsLayer;
 use tracing_subscriber;
 use uuid::Uuid;
-use serde_json::Value;
 
 mod helpers;
 
-const COOKIE_NAME: &str = "waf1a_verified";
+const COOKIE_NAME: &str = "fantasma1_verified";
 const COOKIE_DURATION_DAYS: u64 = 7;
 const RATE_LIMIT_WINDOW_MINUTES: u64 = 15;
 const MAX_REQUESTS_PER_WINDOW: u32 = 10;
@@ -299,8 +299,12 @@ impl AppState {
     ) -> (bool, u32) {
         let token_preview = &cookie_value[..std::cmp::min(8, cookie_value.len())];
 
-        eprintln!("[COOKIE_VERIFY] Token: {}... | IP: {} | UA: {}",
-            token_preview, ip, &user_agent[..std::cmp::min(50, user_agent.len())]);
+        eprintln!(
+            "[COOKIE_VERIFY] Token: {}... | IP: {} | UA: {}",
+            token_preview,
+            ip,
+            &user_agent[..std::cmp::min(50, user_agent.len())]
+        );
 
         let mut verified = self.verified_tokens.write().unwrap();
 
@@ -313,7 +317,10 @@ impl AppState {
                 .as_secs();
 
             let age_days = (now - client.created_at) / (24 * 3600);
-            eprintln!("[COOKIE_VERIFY] Token age: {} days (max: {})", age_days, COOKIE_DURATION_DAYS);
+            eprintln!(
+                "[COOKIE_VERIFY] Token age: {} days (max: {})",
+                age_days, COOKIE_DURATION_DAYS
+            );
 
             if now - client.created_at > COOKIE_DURATION_DAYS * 24 * 3600 {
                 eprintln!("❌ [COOKIE_VERIFY] Token expired");
@@ -321,13 +328,18 @@ impl AppState {
             }
 
             let mut suspicion_added = 0;
-            eprintln!("[COOKIE_VERIFY] Starting suspicion check | Current score: {}", client.suspicious_score);
+            eprintln!(
+                "[COOKIE_VERIFY] Starting suspicion check | Current score: {}",
+                client.suspicious_score
+            );
 
             // IP check
             if client.ip != ip {
                 client.ip_changes += 1;
-                eprintln!("[IP_CHANGE] {} -> {} | Total changes: {}",
-                    client.ip, ip, client.ip_changes);
+                eprintln!(
+                    "[IP_CHANGE] {} -> {} | Total changes: {}",
+                    client.ip, ip, client.ip_changes
+                );
 
                 if client.ip_changes > 3 {
                     suspicion_added += 30;
@@ -341,10 +353,12 @@ impl AppState {
             // User agent check
             if client.user_agent != user_agent {
                 client.user_agent_changes += 1;
-                eprintln!("[USER_AGENT_CHANGE] Old: {} | New: {} | Total changes: {}",
+                eprintln!(
+                    "[USER_AGENT_CHANGE] Old: {} | New: {} | Total changes: {}",
                     &client.user_agent[..std::cmp::min(40, client.user_agent.len())],
                     &user_agent[..std::cmp::min(40, user_agent.len())],
-                    client.user_agent_changes);
+                    client.user_agent_changes
+                );
 
                 if client.user_agent_changes > 2 {
                     suspicion_added += 40;
@@ -357,9 +371,11 @@ impl AppState {
             // TLS fingerprint check
             if !client.tls_fingerprint.is_empty() && client.tls_fingerprint != tls_fp {
                 suspicion_added += 50;
-                eprintln!("[TLS_CHANGE] Old: {} | New: {} | +50 suspicion",
+                eprintln!(
+                    "[TLS_CHANGE] Old: {} | New: {} | +50 suspicion",
                     &client.tls_fingerprint[..std::cmp::min(16, client.tls_fingerprint.len())],
-                    &tls_fp[..std::cmp::min(16, tls_fp.len())]);
+                    &tls_fp[..std::cmp::min(16, tls_fp.len())]
+                );
             } else if !client.tls_fingerprint.is_empty() {
                 eprintln!("✓ [TLS_CHECK] TLS fingerprint unchanged");
             } else {
@@ -373,7 +389,10 @@ impl AppState {
                     compare_browser_fingerprints(&client.browser_fingerprint, browser_fp);
 
                 if fp_suspicion > 0 {
-                    eprintln!("⚠️  [FP_CHANGE] Browser fingerprint differences detected: +{} suspicion", fp_suspicion);
+                    eprintln!(
+                        "⚠️  [FP_CHANGE] Browser fingerprint differences detected: +{} suspicion",
+                        fp_suspicion
+                    );
                     suspicion_added += fp_suspicion;
                 } else {
                     eprintln!("✓ [FP_CHECK] Browser fingerprint matches");
@@ -382,8 +401,7 @@ impl AppState {
                 if fp_suspicion > 20 {
                     eprintln!(
                         "🚨 [FP_ALERT] Significant browser fingerprint change for token {}: +{} suspicion",
-                        token_preview,
-                        fp_suspicion
+                        token_preview, fp_suspicion
                     );
                 }
             } else if client.browser_fingerprint.is_empty() {
@@ -398,7 +416,10 @@ impl AppState {
                 self.check_concurrent_usage(cookie_value, ip, user_agent, tls_fp);
 
             if concurrent_suspicion > 0 {
-                eprintln!("⚠️  [CONCURRENT] Multiple sessions detected: +{} suspicion", concurrent_suspicion);
+                eprintln!(
+                    "⚠️  [CONCURRENT] Multiple sessions detected: +{} suspicion",
+                    concurrent_suspicion
+                );
             } else {
                 eprintln!("✓ [CONCURRENT] Single session detected");
             }
@@ -409,15 +430,23 @@ impl AppState {
             client.last_seen = now;
             client.request_count += 1;
 
-            eprintln!("[SUMMARY] Added: {} | Total score: {} | Requests: {}",
-                suspicion_added, client.suspicious_score, client.request_count);
+            eprintln!(
+                "[SUMMARY] Added: {} | Total score: {} | Requests: {}",
+                suspicion_added, client.suspicious_score, client.request_count
+            );
 
             if client.suspicious_score > 80 {
-                eprintln!("🚫 [BLOCKED] Suspicion score {} exceeds threshold of 80", client.suspicious_score);
+                eprintln!(
+                    "🚫 [BLOCKED] Suspicion score {} exceeds threshold of 80",
+                    client.suspicious_score
+                );
                 return (false, client.suspicious_score);
             }
 
-            eprintln!("✅ [ALLOWED] Cookie verified | Score: {} | Status: OK\n", client.suspicious_score);
+            eprintln!(
+                "✅ [ALLOWED] Cookie verified | Score: {} | Status: OK\n",
+                client.suspicious_score
+            );
             (true, client.suspicious_score)
         } else {
             eprintln!("❌ [COOKIE_VERIFY] Token not found in verified_tokens\n");
@@ -546,8 +575,6 @@ fn get_client_ip(headers: &HeaderMap) -> IpAddr {
 
     "127.0.0.1".parse().unwrap()
 }
-
-
 
 fn get_tls_fingerprint(headers: &HeaderMap) -> String {
     let mut fingerprint_parts = Vec::new();
@@ -882,8 +909,60 @@ async fn admin_stats(State(state): State<AppState>) -> impl IntoResponse {
     )
 }
 
+async fn validate_handler(State(state): State<AppState>, headers: HeaderMap) -> impl IntoResponse {
+    let client_ip = get_client_ip(&headers);
+    let user_agent = get_user_agent(&headers);
+    let tls_fingerprint = get_tls_fingerprint(&headers);
+    eprintln!("🔍 [VALIDATE] Request from {}", client_ip);
+
+    if let Some(cookie_value) = extract_cookie_value(&headers, COOKIE_NAME) {
+        let (is_valid, suspicion_score) = state.is_verified_by_cookie(
+            &cookie_value,
+            client_ip,
+            &user_agent,
+            &tls_fingerprint,
+            "",
+        );
+
+        if is_valid && suspicion_score <= SUSPICION_THRESHOLD {
+            eprintln!("✅ [VALIDATE] Valid cookie, score: {}", suspicion_score);
+
+            // Return 200 - Nginx allows request through
+            let mut response = StatusCode::OK.into_response();
+            response.headers_mut().insert(
+                "X-Fantasma1-Score",
+                HeaderValue::from_str(&suspicion_score.to_string()).unwrap(),
+            );
+            return response;
+        } else {
+            eprintln!(
+                "⚠️ [VALIDATE] Invalid or suspicious: score {}",
+                suspicion_score
+            );
+        }
+    } else {
+        eprintln!("❌ [VALIDATE] No cookie found");
+    }
+
+    // Return 401 - Nginx shows challenge page
+    StatusCode::UNAUTHORIZED.into_response()
+}
+
 async fn robots_txt() -> impl IntoResponse {
     "User-agent: *\nDisallow: /secret-admin-link\n"
+}
+
+async fn proxy_to_target(state: AppState) -> Response {
+    let mut context = Context::new();
+    context.insert("target_url", &state.target_url);
+
+    match state.templates.render("success.html", &context) {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            eprintln!("Template error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Template error").into_response()
+        }
+    }
 }
 
 #[tokio::main]
@@ -905,6 +984,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = Router::new()
         .route("/", get(main_handler))
+        .route("/validate", get(validate_handler))
         .route("/verify-pow", post(verify_pow))
         .route("/health", get(health_check))
         //TODO: add auth
@@ -918,7 +998,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .with_state(state);
 
     let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
-    let addr = format!("0.0.0.0:{}", port);
+    let addr = format!("127.0.0.1:{}", port);
 
     println!("Fantasma One Enhanced starting on {}", addr);
     println!(
