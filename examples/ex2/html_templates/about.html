@@ -1,0 +1,30 @@
+{% extends "base.html" %} {% block title %}About{% endblock %} {% block gradient %}linear-gradient(135deg, #f093fb 0%,
+#f5576c 100%){% endblock %} {% block content %}
+<h1>📖 About This Site</h1>
+<p>This is a simple 3-page website built with Rust and Axum.</p>
+
+<h2>Purpose:</h2>
+<p>This website demonstrates how Fantasma-One protects against AI/LLM scrapers using:</p>
+<ul>
+    <li><strong>Proof of Work challenges</strong> - Computationally expensive for bots</li>
+    <li><strong>Browser fingerprinting</strong> - Detects automation tools</li>
+    <li><strong>Behavioral analysis</strong> - Mouse movements, timing patterns</li>
+    <li><strong>Cookie validation</strong> - 14-day authentication</li>
+    <li><strong>Rate limiting</strong> - Prevents rapid scraping</li>
+    <li><strong>Honeypots</strong> - Detects bot behavior</li>
+</ul>
+
+<h2>Architecture:</h2>
+<pre style="background: rgba(0, 0, 0, 0.3); padding: 15px; border-radius: 5px; overflow-x: auto">
+Internet → Nginx → Fantasma-One (port 3000) → This Site (port 8080)
+                      ↓
+                  Validates
+                      ↓
+                  Proxies
+</pre>
+
+<p>
+    Notice how you didn't see the challenge when navigating from the home page? That's because your cookie is still
+    valid!
+</p>
+{% endblock %}

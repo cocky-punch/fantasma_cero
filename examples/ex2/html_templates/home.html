@@ -1,0 +1,21 @@
+{% extends "base.html" %} {% block title %}Home{% endblock %} {% block gradient %}linear-gradient(135deg, #667eea 0%,
+#764ba2 100%){% endblock %} {% block content %}
+<h1>🏠 Home Page <span class="protected-badge">🛡️ Protected by Fantasma-One</span></h1>
+<p>Welcome to the test website! This site is protected by Fantasma-One.</p>
+<p>If you can see this page, you've successfully completed the Proof of Work challenge!</p>
+
+<h2>How it works:</h2>
+<ol>
+    <li>First visit: You solved a computational challenge</li>
+    <li>Cookie was set on your browser</li>
+    <li>Fantasma-One validated your cookie</li>
+    <li>This request was proxied to the actual website (this page!)</li>
+</ol>
+
+<p><strong>Your session is valid for 14 days.</strong></p>
+
+<p>
+    Try navigating to <a href="/about" style="color: #ffd700">About</a> or
+    <a href="/contact" style="color: #ffd700">Contact</a> - you won't see the challenge again!
+</p>
+{% endblock %}

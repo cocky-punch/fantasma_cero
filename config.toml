@@ -2,9 +2,8 @@
 port = 13500
 jwt_secret = "supersecretjwtkey5432543"
 hmac_secret = "supersecrethmackey76545654354"
+operation_mode = "proxy"
 
-[pow]
-difficulty = 5
 
 [traps]
 enabled = true
@@ -13,4 +12,29 @@ ttl_seconds = 1800
 purge_interval = 300
 
 [target]
-origin = "http://localhost:8080"
+origin_url = "http://localhost:8080"
+
+[persistence]
+backend = "sqlite"
+sqlite_path = "fantasma1.db"
+
+
+[pow_challenge]
+# "argon2" | "sha256"
+algorithm = "argon2"
+
+# TODO
+# Layers of protection
+# check_js_enabled = true       # Quick JS check first
+# require_pow_challenge = true  # Then PoW for unverified
+
+
+# TODO remove
+difficulty = 4
+
+base_difficulty = 2  # Changed from 4 (Argon2 time cost)
+max_difficulty = 6   # Changed from 7 (Argon2 time cost)
+cookie_duration_days = 14
+rate_limit_window_minutes = 15
+max_requests_per_window = 10
+suspicion_threshold = 40

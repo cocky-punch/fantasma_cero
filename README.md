@@ -7,10 +7,9 @@ A web firewall (WAF) that both scares away and lures those pesky LLM/AI scraper 
 
 Being a customizable tool, *Fantasma Cero*  supports and employs:
 * Proof-of-Work (PoW) challenge
-* HMAC tokens
-* JWT tokens
 * Trap endpoint detection
 * Wrong and decoy content which poisons AI scrapers
+* GPU-resisent PoW algorithm - `argon2`
 
 Only verified visitors are allowed through to the configured backend.
 
@@ -23,3 +22,10 @@ Only verified visitors are allowed through to the configured backend.
    cargo run --release
    ```
 3. Point your domain or client traffic to the proxy server.
+
+### TODO
+- [ ] poison AI-LLM scrapers with fake data
+- [ ] different PoW difficulty per route
+- [ ] option "JS must be enabled" - defence against some simple scrapers
+- [ ] admin dashboards
+- [ ] attribution of AI-LLM scrapers

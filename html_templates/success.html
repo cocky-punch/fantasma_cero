@@ -1,57 +1,57 @@
-<!DOCTYPE html>
+<!doctype html>
 <html>
-<head>
-    <title>Access Granted - Waf-1a</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <style>
-        body {
-            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-            max-width: 600px;
-            margin: 100px auto;
-            padding: 20px;
-            background: linear-gradient(135deg, #4CAF50 0%, #45a049 100%);
-            color: white;
-        }
-        .container {
-            background: rgba(255, 255, 255, 0.1);
-            padding: 40px;
-            border-radius: 10px;
-            backdrop-filter: blur(10px);
-            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
-            text-align: center;
-        }
-        .stats {
-            background: rgba(0, 0, 0, 0.2);
-            padding: 20px;
-            border-radius: 5px;
-            margin: 20px 0;
-            text-align: left;
-        }
-    </style>
-</head>
-<body>
-    <div class="container">
-        <h1>✅ Access Granted!</h1>
-        <p>You have successfully completed the security challenge and passed all behavioral checks.</p>
+    <head>
+        <title>Access Granted - Fantasma One</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+        <style>
+            body {
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+                max-width: 600px;
+                margin: 100px auto;
+                padding: 20px;
+                background: linear-gradient(135deg, #4caf50 0%, #45a049 100%);
+                color: white;
+            }
+            .container {
+                background: rgba(255, 255, 255, 0.1);
+                padding: 40px;
+                border-radius: 10px;
+                backdrop-filter: blur(10px);
+                box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+                text-align: center;
+            }
+            .stats {
+                background: rgba(0, 0, 0, 0.2);
+                padding: 20px;
+                border-radius: 5px;
+                margin: 20px 0;
+                text-align: left;
+            }
+        </style>
+    </head>
+    <body>
+        <div class="container">
+            <h1>✅ Access Granted!</h1>
+            <p>You have successfully completed the security challenge and passed all behavioral checks.</p>
 
-        <div class="stats">
-            <h3>Protection Status:</h3>
-            <ul>
-                <li>✅ Proof of Work: Completed</li>
-                <li>✅ Behavioral Analysis: Passed</li>
-                <li>✅ Rate Limiting: Within limits</li>
-                <li>✅ Honeypot Detection: Clean</li>
-                <li>✅ Cookie Authentication: Active</li>
-            </ul>
+            <div class="stats">
+                <h3>Protection Status:</h3>
+                <ul>
+                    <li>✅ Proof of Work: Completed</li>
+                    <li>✅ Behavioral Analysis: Passed</li>
+                    <li>✅ Rate Limiting: Within limits</li>
+                    <li>✅ Honeypot Detection: Clean</li>
+                    <li>✅ Cookie Authentication: Active</li>
+                </ul>
+            </div>
+
+            <p>Protected site: <code>{{ target_url }}</code></p>
+            <p><strong>Your access is valid for 14 days on this device.</strong></p>
+
+            <small style="opacity: 0.8">
+                This protection layer helps defend against automated scrapers, bots, and malicious traffic while
+                ensuring legitimate users can access content seamlessly.
+            </small>
         </div>
-
-        <p>Protected site: <code>{{ target_url }}</code></p>
-        <p><strong>Your access is valid for 14 days on this device.</strong></p>
-
-        <small style="opacity: 0.8;">
-            This protection layer helps defend against automated scrapers,
-            bots, and malicious traffic while ensuring legitimate users can access content seamlessly.
-        </small>
-    </div>
-</body>
+    </body>
 </html>
