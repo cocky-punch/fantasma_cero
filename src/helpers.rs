@@ -283,3 +283,25 @@ fn get_tls_fingerprint(headers: &HeaderMap) -> String {
     let hash = Sha256::digest(combined.as_bytes());
     hex::encode(hash)[..16].to_string()
 }
+
+// fn resolve_port() -> u16 {
+//     // 1) CLI --port has highest precedence
+//     let mut args = env::args().skip(1);
+//     while let Some(arg) = args.next() {
+//         if arg == "--port" {
+//             if let Some(v) = args.next() {
+//                 if let Ok(port) = v.parse::<u16>() {
+//                     return port;
+//                 }
+//             }
+//         }
+//     }
+
+//     // 2) Config value
+//     if let Some(port) = CONFIG.server.port {
+//         return port;
+//     }
+
+//     // 3) Fallback
+//     8080
+// }

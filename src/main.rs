@@ -27,7 +27,7 @@ use uuid::Uuid;
 mod config;
 mod helpers;
 
-const COOKIE_NAME: &str = "fantasma1_verified";
+const COOKIE_NAME: &str = "fantasma0_verified";
 // days
 //TODO - into config
 const COOKIE_DURATION_DAYS: u64 = 1;
@@ -38,6 +38,8 @@ const MAX_DIFFICULTY: u32 = 7;
 const DEFAULT_TARGET_URL: &'static str = "example.com";
 const SUSPICION_THRESHOLD: u32 = 40;
 static HOST_HEADER: axum::http::HeaderName = axum::http::HeaderName::from_static("host");
+const DEFAULT_PORT: u16 = 8080;
+const APPLICATION_NAME: &'static str = "fantasma0";
 
 #[derive(Clone)]
 struct AppState {
@@ -701,10 +703,6 @@ impl AppState {
     }
 }
 
-fn parse_ip(ip_str: &str) -> Option<IpAddr> {
-    ip_str.parse().ok()
-}
-
 fn get_client_ip(headers: &HeaderMap) -> IpAddr {
     let ip_headers = [
         "cf-connecting-ip",
@@ -717,7 +715,7 @@ fn get_client_ip(headers: &HeaderMap) -> IpAddr {
         if let Some(header_value) = headers.get(*header_name) {
             if let Ok(header_str) = header_value.to_str() {
                 let first_ip = header_str.split(',').next().unwrap_or("").trim();
-                if let Some(ip) = parse_ip(first_ip) {
+                if let Some(ip) = first_ip.parse().ok() {
                     return ip;
                 }
             }
@@ -924,110 +922,6 @@ fn compare_browser_fingerprints(stored: &str, current: &str) -> u32 {
     suspicion
 }
 
-async fn main_handler(
-    State(state): State<AppState>,
-    req: axum::http::Request<axum::body::Body>,
-) -> Response<Body> {
-    let client_ip = get_client_ip(&req.headers());
-    let user_agent = get_user_agent(&req.headers());
-    let tls_fingerprint = get_tls_fingerprint(&req.headers());
-
-    // Try to get browser fingerprint from custom header (if provided)
-    let browser_fp = req
-        .headers()
-        .get("x-browser-fingerprint")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("");
-
-    if state.is_ip_blocked(client_ip) {
-        let mut context = Context::new();
-        context.insert(
-            "message",
-            "Your IP has been blocked due to suspicious activity.",
-        );
-        return render_template(&state.templates, "blocked.html", &context);
-    }
-
-    //TODO
-    // LAYER 1: Quick JS check (optional)
-    // if state.config.security.check_js_enabled {
-    //     if extract_cookie_value(&headers, "js_verified").is_none() {
-    //         eprintln!("[JS_CHECK] No js_verified cookie, sending JS challenge");
-    //         return Html(r#"
-    //             <html>
-    //             <head><title>Verifying...</title></head>
-    //             <body>
-    //                 <h2>Verifying your browser...</h2>
-    //                 <script>
-    //                     document.cookie = 'js_verified=1; Path=/; Max-Age=86400';
-    //                     window.location.reload();
-    //                 </script>
-    //                 <noscript>
-    //                     <p>JavaScript is required to access this site.</p>
-    //                 </noscript>
-    //             </body>
-    //             </html>
-    //         "#).into_response();
-    //     }
-    // }
-    //
-
-    if let Some(cookie_value) = extract_cookie_value(&req.headers(), COOKIE_NAME) {
-        let (is_valid, suspicion_score) = state.is_verified_by_cookie(
-            &cookie_value,
-            client_ip,
-            &user_agent,
-            &tls_fingerprint,
-            &browser_fp,
-        );
-
-        if is_valid {
-            // TODO
-            // state.config.security.suspicion_threshold {
-            if suspicion_score > SUSPICION_THRESHOLD {
-                let mut context = Context::new();
-                context.insert("suspicion_score", &suspicion_score);
-                return render_template(&state.templates, "suspicious.html", &context);
-            }
-
-            // integration glue
-            match config::CONFIG.server.operation_mode {
-                // Proxy to the protected site
-                config::OperationMode::Proxy => {
-                    // Forward request to protected site and return its response
-                    return proxy_to_target(req).await;
-                }
-                // Simply return 200, letting Nginx, Apache, Caddy... proxy it
-                config::OperationMode::ValidationOnly => {
-                    let mut response = StatusCode::OK.into_response();
-                    response
-                        .headers_mut()
-                        .insert("X-Fantasma1-Verified", HeaderValue::from_static("true"));
-                    return response;
-                }
-            }
-        } else if suspicion_score > 0 {
-            let mut context = Context::new();
-            context.insert("suspicion_score", &suspicion_score);
-            return render_template(&state.templates, "invalidated.html", &context);
-        }
-    }
-
-    if !state.check_rate_limit(client_ip) {
-        let mut context = Context::new();
-        context.insert("message", "Too many requests. Please try again later.");
-        return render_template(&state.templates, "rate_limited.html", &context);
-    }
-
-    let challenge = state.generate_challenge(client_ip, &user_agent);
-    let mut context = Context::new();
-    context.insert("nonce", &challenge.nonce);
-    context.insert("difficulty", &challenge.difficulty);
-    context.insert("expected_time", "10-60 seconds");
-    context.insert("algorithm", &config::CONFIG.pow_challenge.algorithm);
-    render_template(&state.templates, "challenge.html", &context)
-}
-
 async fn verify_pow(
     State(state): State<AppState>,
     headers: HeaderMap,
@@ -1088,7 +982,7 @@ async fn honeypot_route(State(state): State<AppState>, headers: HeaderMap) -> im
 }
 
 async fn health_check() -> impl IntoResponse {
-    "Fantasma One is running"
+    "Fantasma0 is running"
 }
 
 async fn admin_stats(State(state): State<AppState>) -> impl IntoResponse {
@@ -1146,8 +1040,12 @@ async fn validate_handler(State(state): State<AppState>, headers: HeaderMap) -> 
 
             // Return 200 - Nginx allows request through
             let mut response = StatusCode::OK.into_response();
+            let header_name = axum::http::HeaderName::from_bytes(
+                format!("x-{}-verified", APPLICATION_NAME).as_bytes(),
+            )
+            .unwrap();
             response.headers_mut().insert(
-                "X-Fantasma1-Score",
+                header_name,
                 HeaderValue::from_str(&suspicion_score.to_string()).unwrap(),
             );
             return response;
@@ -1228,11 +1126,174 @@ async fn proxy_to_target(mut req: Request<Body>) -> Response<Body> {
     response
 }
 
+fn cli_port() -> Option<u16> {
+    let mut args = std::env::args().skip(1);
+    while let Some(arg) = args.next() {
+        if arg == "--port" {
+            return args.next().and_then(|p| p.parse().ok());
+        }
+    }
+    None
+}
+
+fn env_port() -> Option<u16> {
+    std::env::var("PORT").ok()?.parse().ok()
+}
+
+fn build_validation_router(state: AppState) -> Router {
+    Router::new()
+        .route("/validate", get(validate_handler))
+        // .route("/challenge", get(challenge_handler))
+        .route("/verify_pow", post(verify_pow))
+        .route("/health", get(health_check))
+        .with_state(state)
+}
+
+fn build_proxy_router(state: AppState) -> Router {
+    Router::new()
+        .route("/", axum::routing::any(main_handler))
+        .route("/{*path}", axum::routing::any(main_handler))
+        .route("/verify_pow", post(verify_pow))
+        .route("/robots.txt", get(robots_txt))
+        .route("/wp-admin", get(honeypot_route))
+        .route("/health", get(health_check))
+        .with_state(state)
+}
+
+enum ValidationDecision {
+    Allow,
+    Challenge,
+    Blocked(&'static str),
+    Suspicious(u32),
+    RateLimited,
+}
+
+fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> ValidationDecision {
+    let headers = req.headers();
+
+    let client_ip = get_client_ip(headers);
+    let user_agent = get_user_agent(headers);
+    let tls_fingerprint = get_tls_fingerprint(headers);
+
+    let browser_fp = headers
+        .get("x-browser-fingerprint")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    if state.is_ip_blocked(client_ip) {
+        return ValidationDecision::Blocked("Your IP has been blocked due to suspicious activity.");
+    }
+
+    if let Some(cookie_value) = extract_cookie_value(headers, COOKIE_NAME) {
+        let (is_valid, suspicion_score) = state.is_verified_by_cookie(
+            &cookie_value,
+            client_ip,
+            &user_agent,
+            &tls_fingerprint,
+            &browser_fp,
+        );
+
+        if is_valid {
+            if suspicion_score > SUSPICION_THRESHOLD {
+                return ValidationDecision::Suspicious(suspicion_score);
+            }
+            return ValidationDecision::Allow;
+        }
+
+        if suspicion_score > 0 {
+            return ValidationDecision::Suspicious(suspicion_score);
+        }
+    }
+
+    if !state.check_rate_limit(client_ip) {
+        return ValidationDecision::RateLimited;
+    }
+
+    ValidationDecision::Challenge
+}
+
+async fn main_handler(
+    State(state): State<AppState>,
+    req: axum::http::Request<Body>,
+) -> Response<Body> {
+    let decision = decide_request(&state, &req);
+
+    match config::CONFIG.server.operation_mode {
+        config::OperationMode::Proxy => handle_proxy_mode(&state, decision, req).await,
+        config::OperationMode::ValidationOnly => handle_validation_only(decision),
+    }
+}
+
+async fn handle_proxy_mode(
+    state: &AppState,
+    decision: ValidationDecision,
+    req: axum::http::Request<Body>,
+) -> Response<Body> {
+    match decision {
+        ValidationDecision::Allow => proxy_to_target(req).await,
+
+        ValidationDecision::Challenge => {
+            let client_ip = get_client_ip(req.headers());
+            let user_agent = get_user_agent(req.headers());
+
+            let challenge = state.generate_challenge(client_ip, &user_agent);
+
+            let mut context = Context::new();
+            context.insert("nonce", &challenge.nonce);
+            context.insert("difficulty", &challenge.difficulty);
+            context.insert("expected_time", "10-60 seconds");
+            context.insert("algorithm", &config::CONFIG.pow_challenge.algorithm);
+
+            render_template(&state.templates, "challenge.html", &context)
+        }
+
+        ValidationDecision::Blocked(msg) => {
+            let mut ctx = Context::new();
+            ctx.insert("message", msg);
+            render_template(&state.templates, "blocked.html", &ctx)
+        }
+
+        ValidationDecision::Suspicious(score) => {
+            let mut ctx = Context::new();
+            ctx.insert("suspicion_score", &score);
+            render_template(&state.templates, "suspicious.html", &ctx)
+        }
+
+        ValidationDecision::RateLimited => {
+            let mut ctx = Context::new();
+            ctx.insert("message", "Too many requests. Please try again later.");
+            render_template(&state.templates, "rate_limited.html", &ctx)
+        }
+    }
+}
+
+fn handle_validation_only(decision: ValidationDecision) -> Response<Body> {
+    match decision {
+        ValidationDecision::Allow => {
+            let mut resp = StatusCode::OK.into_response();
+            let header_name = axum::http::HeaderName::from_bytes(
+                format!("x-{}-verified", APPLICATION_NAME).as_bytes(),
+            )
+            .unwrap();
+            resp.headers_mut()
+                .insert(header_name, HeaderValue::from_static("true"));
+            resp
+        }
+
+        ValidationDecision::Challenge => StatusCode::UNAUTHORIZED.into_response(),
+        ValidationDecision::Blocked(_) => StatusCode::FORBIDDEN.into_response(),
+        ValidationDecision::Suspicious(_) => StatusCode::UNAUTHORIZED.into_response(),
+        ValidationDecision::RateLimited => StatusCode::TOO_MANY_REQUESTS.into_response(),
+    }
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //TODO
     // tracing_subscriber::init();
     tracing_subscriber::fmt::init();
+
+    let _ = dotenvy::dotenv();
 
     let target_url: String =
         std::env::var("TARGET_URL").unwrap_or_else(|_| format!("https://{}", DEFAULT_TARGET_URL));
@@ -1245,26 +1306,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let app = Router::new()
-        // .route("/", get(main_handler))
-        .route("/validate", get(validate_handler))
-        .route("/verify-pow", post(verify_pow))
-        .route("/health", get(health_check))
-        //TODO: add auth
-        .route("/admin/stats", get(admin_stats))
-        //TODO from config, dynamically
-        .route("/secret-admin-link", get(honeypot_route))
-        .route("/wp-admin", get(honeypot_route))
-        .route("/robots.txt", get(robots_txt))
-        //TODO
-        .fallback(main_handler)
-        .layer(ServiceBuilder::new().layer(CorsLayer::permissive()))
-        .with_state(state);
+    let (app, listen_interface) = match config::CONFIG.server.operation_mode {
+        config::OperationMode::Proxy => (build_proxy_router(state), "0.0.0.0"),
+        config::OperationMode::ValidationOnly => (build_validation_router(state), "127.0.0.1"),
+    };
 
-    let port = std::env::var("PORT").unwrap_or_else(|_| "3000".to_string());
-    let addr = format!("127.0.0.1:{}", port);
+    let port = cli_port()
+        .or_else(env_port)
+        .or(config::CONFIG.server.port)
+        .unwrap_or(DEFAULT_PORT);
 
-    println!("Fantasma One Enhanced starting on {}", addr);
+    let addr = format!("{}:{}", listen_interface, port);
+
+    println!("Fantasma0 Enhanced starting on {}", addr);
+    println!("Operation mode: {:?}", config::CONFIG.server.operation_mode);
     println!(
         "Target URL: {}",
         std::env::var("TARGET_URL").unwrap_or_else(|_| format!("https://{}", DEFAULT_TARGET_URL))

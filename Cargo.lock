@@ -489,6 +489,7 @@ dependencies = [
  "argon2",
  "axum",
  "base64",
+ "dotenvy",
  "hex",
  "hmac",
  "jsonwebtoken",

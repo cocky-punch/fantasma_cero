@@ -9,7 +9,7 @@ const MAX_DIFFICULTY: u64 = 6; // ~30-60 seconds
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
-    pub port: u16,
+    pub port: Option<u16>,
     pub jwt_secret: String,
     pub hmac_secret: String,
     pub operation_mode: OperationMode,
