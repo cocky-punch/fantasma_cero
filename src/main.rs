@@ -28,11 +28,16 @@ mod config;
 mod helpers;
 
 const COOKIE_NAME: &str = "fantasma0_verified";
+
 // days
 //TODO - into config
 const COOKIE_DURATION_DAYS: u64 = 1;
-const RATE_LIMIT_WINDOW_MINUTES: u64 = 15;
-const MAX_REQUESTS_PER_WINDOW: u32 = 10;
+
+//TODO
+const RATE_LIMIT_WINDOW_MINUTES: u64 = 999;
+//TODO
+const MAX_REQUESTS_PER_WINDOW: u32 = 999;
+
 const BASE_DIFFICULTY: u32 = 4;
 const MAX_DIFFICULTY: u32 = 7;
 const DEFAULT_TARGET_URL: &'static str = "example.com";
@@ -1143,7 +1148,7 @@ fn env_port() -> Option<u16> {
 fn build_validation_router(state: AppState) -> Router {
     Router::new()
         .route("/validate", get(validate_handler))
-        // .route("/challenge", get(challenge_handler))
+        .route("/challenge", get(challenge_handler))
         .route("/verify_pow", post(verify_pow))
         .route("/health", get(health_check))
         .with_state(state)
@@ -1151,12 +1156,12 @@ fn build_validation_router(state: AppState) -> Router {
 
 fn build_proxy_router(state: AppState) -> Router {
     Router::new()
-        .route("/", axum::routing::any(main_handler))
-        .route("/{*path}", axum::routing::any(main_handler))
         .route("/verify_pow", post(verify_pow))
         .route("/robots.txt", get(robots_txt))
         .route("/wp-admin", get(honeypot_route))
         .route("/health", get(health_check))
+        .route("/", axum::routing::any(main_handler))
+        .route("/{*path}", axum::routing::any(main_handler))
         .with_state(state)
 }
 
@@ -1233,18 +1238,22 @@ async fn handle_proxy_mode(
         ValidationDecision::Allow => proxy_to_target(req).await,
 
         ValidationDecision::Challenge => {
-            let client_ip = get_client_ip(req.headers());
-            let user_agent = get_user_agent(req.headers());
+            // let client_ip = get_client_ip(req.headers());
+            // let user_agent = get_user_agent(req.headers());
 
-            let challenge = state.generate_challenge(client_ip, &user_agent);
+            // let challenge = state.generate_challenge(client_ip, &user_agent);
 
-            let mut context = Context::new();
-            context.insert("nonce", &challenge.nonce);
-            context.insert("difficulty", &challenge.difficulty);
-            context.insert("expected_time", "10-60 seconds");
-            context.insert("algorithm", &config::CONFIG.pow_challenge.algorithm);
+            // let mut context = Context::new();
+            // context.insert("nonce", &challenge.nonce);
+            // context.insert("difficulty", &challenge.difficulty);
+            // context.insert("expected_time", "10-60 seconds");
+            // context.insert("algorithm", &config::CONFIG.pow_challenge.algorithm);
 
-            render_template(&state.templates, "challenge.html", &context)
+            // render_template(&state.templates, "challenge.html", &context)
+            //
+
+
+            render_challenge(state, req.headers())
         }
 
         ValidationDecision::Blocked(msg) => {
@@ -1285,6 +1294,25 @@ fn handle_validation_only(decision: ValidationDecision) -> Response<Body> {
         ValidationDecision::Suspicious(_) => StatusCode::UNAUTHORIZED.into_response(),
         ValidationDecision::RateLimited => StatusCode::TOO_MANY_REQUESTS.into_response(),
     }
+}
+
+async fn challenge_handler(State(state): State<AppState>, headers: HeaderMap) -> Response<Body> {
+    render_challenge(&state, &headers)
+}
+
+fn render_challenge(state: &AppState, headers: &HeaderMap) -> Response<Body> {
+    let client_ip = get_client_ip(headers);
+    let user_agent = get_user_agent(headers);
+
+    let challenge = state.generate_challenge(client_ip, &user_agent);
+
+    let mut context = Context::new();
+    context.insert("nonce", &challenge.nonce);
+    context.insert("difficulty", &challenge.difficulty);
+    context.insert("expected_time", "10-60 seconds");
+    context.insert("algorithm", &config::CONFIG.pow_challenge.algorithm);
+
+    render_template(&state.templates, "challenge.html", &context)
 }
 
 #[tokio::main]

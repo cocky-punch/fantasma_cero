@@ -1,7 +1,7 @@
 <!doctype html>
 <html>
     <head>
-        <title>Access Revoked - Fantasma0</title>
+        <title>Suspicious Activity Detected - Fantasma0</title>
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <style>
             body {
@@ -9,7 +9,7 @@
                 max-width: 600px;
                 margin: 100px auto;
                 padding: 20px;
-                background: linear-gradient(135deg, #f44336 0%, #d32f2f 100%);
+                background: linear-gradient(135deg, #ff9800 0%, #f57c00 100%);
                 color: white;
             }
             .container {
@@ -20,17 +20,23 @@
                 box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
                 text-align: center;
             }
+            .warning {
+                background: rgba(255, 0, 0, 0.2);
+                padding: 20px;
+                border-radius: 5px;
+                margin: 20px 0;
+            }
             button {
-                background: #ff6b6b;
+                background: #4caf50;
                 color: white;
                 border: none;
-                padding: 12px 24px;
+                padding: 10px 20px;
                 border-radius: 5px;
                 cursor: pointer;
                 font-size: 16px;
             }
             button:hover {
-                background: #ff5252;
+                background: #45a049;
             }
             ul {
                 text-align: left;
@@ -39,20 +45,16 @@
     </head>
     <body>
         <div class="container">
-            <h1>🚫 Access Revoked</h1>
-            <p>Your authentication cookie has been invalidated due to suspicious activity:</p>
+            <h1>⚠️ Suspicious Activity Detected</h1>
+            <div class="warning">
+                <p><strong>Rate Limited:</strong></p>
+                {{ message }}
+            </div>
 
-            <ul>
-                <li>Suspicious score exceeded threshold: {{ suspicion_score }}/100</li>
-                <li>Detected cookie sharing or automated access</li>
-                <li>Multiple concurrent sessions from different devices</li>
-                <li>Inconsistent browser fingerprints</li>
-            </ul>
-
-            <p><strong>To regain access, you must complete a new security challenge.</strong></p>
+            <p><strong>If this continues, your access may be revoked.</strong></p>
 
             <form method="GET" action="/">
-                <button type="submit">Start New Challenge</button>
+                <button type="submit">Continue to Site</button>
             </form>
         </div>
     </body>

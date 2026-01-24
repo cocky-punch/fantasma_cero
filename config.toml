@@ -3,7 +3,7 @@ port = 8080
 jwt_secret = "supersecretjwtkey5432543"
 hmac_secret = "supersecrethmackey76545654354"
 # validation_only | proxy
-operation_mode = "validation_only"
+operation_mode = "proxy"
 
 
 [traps]
