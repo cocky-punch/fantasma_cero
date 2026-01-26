@@ -10,8 +10,13 @@ const MAX_DIFFICULTY: u64 = 6; // ~30-60 seconds
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
     pub port: Option<u16>,
-    pub jwt_secret: String,
-    pub hmac_secret: String,
+    //TODO
+    // remove for now
+    // pub jwt_secret: String,
+    // pub hmac_secret: String,
+    //
+    pub js_check_enabled: bool,
+    pub js_token_secret: String,
     pub operation_mode: OperationMode,
 }
 
@@ -24,8 +29,6 @@ pub enum PowChallendgeAlgorithm {
 
 #[derive(Debug, Clone, Deserialize)]
 pub struct PowChallendgeConfig {
-    // pub check_js_enabled: bool,
-    // pub require_pow_challenge: bool
     pub algorithm: PowChallendgeAlgorithm,
 
     //TODO remove
@@ -33,7 +36,7 @@ pub struct PowChallendgeConfig {
     //
     pub base_difficulty: u8,
     pub max_difficulty: u8,
-    pub cookie_duration_days: u8,
+    pub cookie_duration_days: u64,
     pub rate_limit_window_minutes: u8,
     pub max_requests_per_window: u8,
     pub suspicion_threshold: u8,

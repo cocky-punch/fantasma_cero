@@ -132,6 +132,7 @@
             <div class="challenge-box">
                 <strong>Challenge ID:</strong> {{ nonce }}<br />
                 <strong>Difficulty Level:</strong> {{ difficulty }}<br />
+                <strong>Algorithm:</strong> {{ algorithm }}<br />
                 <strong>Expected Time:</strong> {{ expected_time }}
             </div>
 
@@ -147,7 +148,7 @@
 
             <input type="text" name="website" class="hidden" id="honeypot" value="" />
 
-            <div class="info">By <strong>Fantasma One</strong></div>
+            <div class="info">By <strong>Fantasma0</strong></div>
         </div>
 
         {% if algorithm == "argon2" %}
@@ -160,26 +161,26 @@
             let startTime = 0;
             let solution = 0;
 
-            document.addEventListener('mousemove', (e) => {
-                if (solving) {
-                    mouseMovements.push({
-                        x: e.clientX,
-                        y: e.clientY,
-                        timestamp: Date.now()
-                    });
+            //TODO
+            // document.addEventListener('mousemove', (e) => {
+            //     if (solving) {
+            //         mouseMovements.push({
+            //             x: e.clientX,
+            //             y: e.clientY,
+            //             timestamp: Date.now()
+            //         });
 
-                    if (mouseMovements.length > 50) {
-                        mouseMovements.shift();
-                    }
-                }
-            });
+            //         if (mouseMovements.length > 50) {
+            //             mouseMovements.shift();
+            //         }
+            //     }
+            // });
 
             async function solvePow() {
                 if (solving) return;
 
                 solving = true;
                 startTime = Date.now();
-                mouseMovements = [];
 
                 const btn = document.getElementById('solveBtn');
                 const status = document.getElementById('status');

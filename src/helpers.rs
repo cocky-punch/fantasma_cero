@@ -5,40 +5,6 @@ use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
 
-pub fn get_challenge_bootstrap_html() -> String {
-    r#"
-<!DOCTYPE html>
-<html>
-<head><title>Verifying...</title></head>
-<body>
-<script>
-    (async function () {
-        const res = await fetch('/challenge');
-        const challenge = await res.json();
-
-
-        //TODO
-        // replace with actual one
-        const solution = solvePow(challenge); // implement this on frontend
-
-
-        const resp = await fetch('/solve', {
-            method: 'POST',
-            body: JSON.stringify(solution),
-            headers: { 'Content-Type': 'application/json' }
-        });
-
-        if (resp.ok) {
-            location.reload();
-        }
-    })();
-</script>
-</body>
-</html>
-"#
-    .to_string()
-}
-
 pub fn get_client_ip(req: &Request<Body>) -> Option<IpAddr> {
     // Try X-Forwarded-For header (may contain multiple IPs)
     if let Some(xff) = req.headers().get("x-forwarded-for") {
@@ -284,24 +250,25 @@ fn get_tls_fingerprint(headers: &HeaderMap) -> String {
     hex::encode(hash)[..16].to_string()
 }
 
-// fn resolve_port() -> u16 {
-//     // 1) CLI --port has highest precedence
-//     let mut args = env::args().skip(1);
-//     while let Some(arg) = args.next() {
-//         if arg == "--port" {
-//             if let Some(v) = args.next() {
-//                 if let Ok(port) = v.parse::<u16>() {
-//                     return port;
-//                 }
-//             }
-//         }
-//     }
+pub fn ua_hash(ua: &str) -> String {
+    let mut h = Sha256::new();
+    h.update(ua.as_bytes());
+    hex::encode(h.finalize())
+}
 
-//     // 2) Config value
-//     if let Some(port) = CONFIG.server.port {
-//         return port;
-//     }
-
-//     // 3) Fallback
-//     8080
-// }
+pub fn ip_prefix(ip: &str) -> String {
+    if let Ok(addr) = ip.parse::<std::net::IpAddr>() {
+        match addr {
+            std::net::IpAddr::V4(v4) => {
+                let o = v4.octets();
+                format!("{}.{}.{}.0/24", o[0], o[1], o[2])
+            }
+            std::net::IpAddr::V6(v6) => {
+                let seg = v6.segments();
+                format!("{:x}:{:x}:{:x}:{:x}::/64", seg[0], seg[1], seg[2], seg[3])
+            }
+        }
+    } else {
+        "invalid".into()
+    }
+}

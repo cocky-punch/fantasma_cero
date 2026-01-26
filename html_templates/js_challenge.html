@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <script>
+            fetch("/verify_js", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                credentials: "same-origin",
+                body: JSON.stringify({ token: "{{ js_token }}" }),
+            })
+                .then((res) => {
+                    if (!res.ok) {
+                        throw new Error("JS verification failed");
+                    }
+                    return res.text();
+                })
+                .then(() => {
+                    window.location.href = "/";
+                })
+                .catch(() => {
+                    document.body.textContent = "JavaScript verification failed.";
+                });
+        </script>
+    </head>
+    <body>
+        checking JS support...
+    </body>
+</html>

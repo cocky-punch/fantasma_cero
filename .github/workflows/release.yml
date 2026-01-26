@@ -1,0 +1,55 @@
+name: Build Release
+
+on:
+    push:
+        tags:
+            - "v*.*.*"
+
+permissions:
+    contents: write
+
+jobs:
+    release:
+        runs-on: ubuntu-latest
+
+        steps:
+            - name: Checkout
+              uses: actions/checkout@v3
+
+            - name: Install Rust toolchain
+              uses: actions-rs/toolchain@v1
+              with:
+                  toolchain: stable
+                  target: x86_64-unknown-linux-gnu
+                  override: true
+
+            - name: Build release binary
+              run: |
+                  cargo build --release --target x86_64-unknown-linux-gnu
+
+            - name: Strip binary
+              run: |
+                  strip target/x86_64-unknown-linux-gnu/release/my_waf || true
+
+            - name: Package release
+              run: |
+                  VERSION=${GITHUB_REF#refs/tags/}
+                  OUTDIR=fantasma_cero-$VERSION-x86_64-unknown-linux-gnu
+                  mkdir "$OUTDIR"
+
+                  cp target/x86_64-unknown-linux-gnu/release/fantasma_cero "$OUTDIR/"
+                  cp config.example.toml \
+                     README.md \
+                     "$OUTDIR/"
+
+                  tar -czf "$OUTDIR.tar.gz" "$OUTDIR"
+                  zip -r "$OUTDIR.zip" "$OUTDIR"
+
+            - name: Publish release artifacts
+              uses: softprops/action-gh-release@v1
+              with:
+                  files: |
+                      fantasma_cero-*.tar.gz
+                      fantasma_cero-*.zip
+              env:
+                  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

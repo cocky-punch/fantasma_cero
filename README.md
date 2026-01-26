@@ -5,27 +5,49 @@ A web firewall (WAF) that both scares away and lures those pesky LLM/AI scraper 
 
 ## Usage
 
-Being a customizable tool, *Fantasma Cero*  supports and employs:
-* Proof-of-Work (PoW) challenge
+Being customizable, *Fantasma Cero*  supports and employs some of the features:
+* Proof-of-Work (PoW) basic challenge
+* GPU-resisent PoW algorithm - `argon2`
 * Trap endpoint detection
 * Wrong and decoy content which poisons AI scrapers
-* GPU-resisent PoW algorithm - `argon2`
 
 Only verified visitors are allowed through to the configured backend.
 
 ### Running
 
-1. Configure your backend and secrets in `config.toml`.
-2. Start the server:
+1. Download and install a release
+```
+# set the proper release version
+VERSION="v0.1.0"
+
+curl -L -O https://github.com/cocky-punch/fantasma_cero/releases/download/$VERSION/fantasma_cero-$VERSION-x86_64-unknown-linux-gnu.tar.gz
+
+tar -xzf fantasma_cero-$VERSION-x86_64-unknown-linux-gnu.tar.gz
+cd fantasma_cero-$VERSION-x86_64-unknown-linux-gnu
+```
+
+2. Configure your backend and secrets in `config.toml`
+```
+cp config.example.toml config.toml
+nano config.toml
+```
+
+3. Also check the example webserver configs in `./examples` for:
+- nginx
+- caddy
+
+Edit the one you need accordingly: port, host, etc; copy it into or merge with your Nginx or Caddy config.
+
+4. Run it:
 
    ```bash
-   cargo run --release
+   ./fantasma_cero
    ```
-3. Point your domain or client traffic to the proxy server.
 
 ### TODO
+- [x] option "JS must be enabled/supported"
 - [ ] poison AI-LLM scrapers with fake data
 - [ ] different PoW difficulty per route
-- [ ] option "JS must be enabled" - defence against some simple scrapers
 - [ ] admin dashboards
 - [ ] attribution of AI-LLM scrapers
+- [ ] ASN-based decisions and bans

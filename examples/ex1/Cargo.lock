@@ -247,7 +247,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "ex2"
+name = "ex1"
 version = "0.1.0"
 dependencies = [
  "axum",

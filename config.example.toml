@@ -1,9 +1,9 @@
 [server]
 port = 8080
-jwt_secret = "supersecretjwtkey5432543"
-hmac_secret = "supersecrethmackey76545654354"
+js_check_enabled = true
+js_token_secret = "<some secret value>"
 # validation_only | proxy
-operation_mode = "proxy"
+operation_mode = "validation_only"
 
 
 [traps]
@@ -23,12 +23,6 @@ sqlite_path = "fantasma0.db"
 [pow_challenge]
 # argon2 | sha256
 algorithm = "sha256"
-
-# TODO
-# Layers of protection
-# check_js_enabled = true       # Quick JS check first
-# require_pow_challenge = true  # Then PoW for unverified
-
 
 # TODO remove
 difficulty = 4

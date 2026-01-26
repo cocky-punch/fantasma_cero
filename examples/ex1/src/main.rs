@@ -1,11 +1,6 @@
-use axum::{
-    extract::State,
-    response::Html,
-    routing::get,
-    Router,
-};
+use axum::{Router, extract::State, response::Html, routing::get};
 use std::sync::Arc;
-use tera::{Tera, Context};
+use tera::{Context, Tera};
 use tokio::net::TcpListener;
 
 #[derive(Clone)]

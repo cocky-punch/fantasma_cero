@@ -1,5 +1,5 @@
 use axum::{
-    Router,
+    Json, Router,
     body::{Body, to_bytes},
     extract::{Form, Query, State},
     http::{HeaderMap, HeaderValue, Request, StatusCode, header},
@@ -7,6 +7,7 @@ use axum::{
     routing::{get, post},
 };
 
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -28,10 +29,12 @@ mod config;
 mod helpers;
 
 const COOKIE_NAME: &str = "fantasma0_verified";
+const JS_ENABLED_COOKIE_NAME: &str = "fantasma0_js_ok";
+type HmacSha256 = hmac::Hmac<sha2::Sha256>;
 
 // days
 //TODO - into config
-const COOKIE_DURATION_DAYS: u64 = 1;
+// const COOKIE_DURATION_DAYS: u64 = 1;
 
 //TODO
 const RATE_LIMIT_WINDOW_MINUTES: u64 = 999;
@@ -56,8 +59,7 @@ struct AppState {
     concurrent_usage: Arc<RwLock<HashMap<String, Vec<ActiveSession>>>>,
     target_url: String,
     templates: Tera,
-    // client: hyper::Client<hyper::client::HttpConnector, axum::body::Body>,
-    //
+
     #[cfg(feature = "persist-sqlite")]
     token_store: Option<Arc<crate::persistence::TokenDbStore>>,
 }
@@ -120,6 +122,11 @@ struct PoWSubmission {
     // timing_data: Option<String>,
     browser_fingerprint: Option<String>,
     honeypot_field: Option<String>,
+}
+
+#[derive(Deserialize)]
+pub struct JsVerifyRequest {
+    pub token: String,
 }
 
 impl AppState {
@@ -449,10 +456,11 @@ impl AppState {
             let age_days = (now - client.created_at) / (24 * 3600);
             eprintln!(
                 "[COOKIE_VERIFY] Token age: {} days (max: {})",
-                age_days, COOKIE_DURATION_DAYS
+                age_days,
+                config::CONFIG.pow_challenge.cookie_duration_days
             );
 
-            if now - client.created_at > COOKIE_DURATION_DAYS * 24 * 3600 {
+            if now - client.created_at > config::CONFIG.pow_challenge.cookie_duration_days * 24 * 3600 {
                 eprintln!("❌ [COOKIE_VERIFY] Token expired");
                 return (false, 0);
             }
@@ -706,6 +714,21 @@ impl AppState {
             false
         }
     }
+
+    fn verify_js_cookie(&self, headers: &HeaderMap, ip: IpAddr, ua: &str) -> bool {
+        if !config::CONFIG.server.js_check_enabled {
+            return true;
+        }
+
+        let js_token_secret = config::CONFIG.server.js_token_secret.as_bytes();
+        let ip_str = ip.to_string();
+
+        let Some(cookie_value) = extract_cookie_value(headers, JS_ENABLED_COOKIE_NAME) else {
+            return false;
+        };
+        // FIXME: const
+        verify_js_token(js_token_secret, &cookie_value, &ip_str, ua, 120)
+    }
 }
 
 fn get_client_ip(headers: &HeaderMap) -> IpAddr {
@@ -932,6 +955,10 @@ async fn verify_pow(
     headers: HeaderMap,
     Form(params): Form<PoWSubmission>,
 ) -> impl IntoResponse {
+    // TODO
+    eprintln!("[DEBUG] [verify_pow] #1");
+    //
+
     let client_ip = get_client_ip(&headers);
     let user_agent = get_user_agent(&headers);
     let tls_fingerprint = get_tls_fingerprint(&headers);
@@ -961,7 +988,7 @@ async fn verify_pow(
             "{}={}; Path=/; Max-Age={}; HttpOnly; Secure; SameSite=Strict",
             COOKIE_NAME,
             token,
-            COOKIE_DURATION_DAYS * 24 * 3600
+            config::CONFIG.pow_challenge.cookie_duration_days * 24 * 3600
         );
 
         let mut response = StatusCode::OK.into_response();
@@ -1024,6 +1051,24 @@ async fn validate_handler(State(state): State<AppState>, headers: HeaderMap) -> 
     let tls_fingerprint = get_tls_fingerprint(&headers);
     eprintln!("🔍 [VALIDATE] Request from {}", client_ip);
 
+    //TODO remove this condition
+    if config::CONFIG.server.js_check_enabled {
+        //
+        let js_ok = state.verify_js_cookie(&headers, client_ip, &user_agent);
+        if !js_ok {
+            let mut resp = StatusCode::UNAUTHORIZED.into_response();
+            let header_name = axum::http::HeaderName::from_bytes(
+                format!("x-{}-challenge", APPLICATION_NAME).as_bytes(),
+            )
+            .unwrap();
+
+            resp.headers_mut()
+                .insert(header_name, HeaderValue::from_static("js"));
+
+            return resp;
+        }
+    }
+
     if let Some(cookie_value) = extract_cookie_value(&headers, COOKIE_NAME) {
         let (is_valid, suspicion_score) = state.is_verified_by_cookie(
             &cookie_value,
@@ -1044,16 +1089,18 @@ async fn validate_handler(State(state): State<AppState>, headers: HeaderMap) -> 
             eprintln!("✅ [VALIDATE] Valid cookie, score: {}", suspicion_score);
 
             // Return 200 - Nginx allows request through
-            let mut response = StatusCode::OK.into_response();
+            let mut resp = StatusCode::OK.into_response();
             let header_name = axum::http::HeaderName::from_bytes(
                 format!("x-{}-verified", APPLICATION_NAME).as_bytes(),
             )
             .unwrap();
-            response.headers_mut().insert(
+
+            resp.headers_mut().insert(
                 header_name,
                 HeaderValue::from_str(&suspicion_score.to_string()).unwrap(),
             );
-            return response;
+
+            return resp;
         } else {
             eprintln!(
                 "⚠️ [VALIDATE] Invalid or suspicious: score {}",
@@ -1064,8 +1111,15 @@ async fn validate_handler(State(state): State<AppState>, headers: HeaderMap) -> 
         eprintln!("❌ [VALIDATE] No cookie found");
     }
 
-    // Return 401 - Nginx shows challenge page
-    StatusCode::UNAUTHORIZED.into_response()
+    // Return 401 - Nginx returns the PoW challenge page
+    let mut resp = StatusCode::UNAUTHORIZED.into_response();
+    let header_name =
+        axum::http::HeaderName::from_bytes(format!("x-{}-challenge", APPLICATION_NAME).as_bytes())
+            .unwrap();
+
+    resp.headers_mut()
+        .insert(header_name, HeaderValue::from_static("pow"));
+    resp
 }
 
 async fn robots_txt() -> impl IntoResponse {
@@ -1080,11 +1134,6 @@ async fn proxy_to_target(mut req: Request<Body>) -> Response<Body> {
         .unwrap_or("/");
 
     let target_url = format!("{}{}", config::CONFIG.target.origin_url, path_and_query);
-
-    // let body = to_bytes(req.body(), usize::MAX)
-    //     .await
-    //     .map_err(|_| StatusCode::BAD_REQUEST)?;
-
     let body = match to_bytes(std::mem::take(req.body_mut()), usize::MAX).await {
         Ok(x) => x,
         Err(_) => {
@@ -1145,29 +1194,40 @@ fn env_port() -> Option<u16> {
     std::env::var("PORT").ok()?.parse().ok()
 }
 
-fn build_validation_router(state: AppState) -> Router {
+fn build_validation_only_router(state: AppState) -> Router {
     Router::new()
         .route("/validate", get(validate_handler))
-        .route("/challenge", get(challenge_handler))
+        //challenges
+        .route("/js_challenge", get(js_challenge_handler))
+        .route("/pow_challenge", get(pow_challenge_handler))
+        // verifications
+        .route("/verify_js", post(verify_js))
         .route("/verify_pow", post(verify_pow))
+        // others
         .route("/health", get(health_check))
         .with_state(state)
 }
 
 fn build_proxy_router(state: AppState) -> Router {
     Router::new()
+        // verifications
+        .route("/verify_js", post(verify_js))
         .route("/verify_pow", post(verify_pow))
+        // others
         .route("/robots.txt", get(robots_txt))
-        .route("/wp-admin", get(honeypot_route))
         .route("/health", get(health_check))
+        // TODO: with "poison bots" option; to be implemented
+        // .route("/wp-admin", get(honeypot_route))
         .route("/", axum::routing::any(main_handler))
         .route("/{*path}", axum::routing::any(main_handler))
         .with_state(state)
 }
 
+#[derive(Debug)]
 enum ValidationDecision {
     Allow,
-    Challenge,
+    JsChallenge,
+    PowChallenge,
     Blocked(&'static str),
     Suspicious(u32),
     RateLimited,
@@ -1189,6 +1249,24 @@ fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> Validati
         return ValidationDecision::Blocked("Your IP has been blocked due to suspicious activity.");
     }
 
+    // ── JS gate (optional) ──────────────────────────────
+    if config::CONFIG.server.js_check_enabled {
+        // DEBUG
+        eprintln!(
+            "[DEBUG] [js_check_enabled] #2; config.js_check_enabled: {}",
+            config::CONFIG.server.js_check_enabled
+        );
+        //
+        if !state.verify_js_cookie(headers, client_ip, &user_agent) {
+            // DEBUG
+            eprintln!("[DEBUG] [js_check_enabled] #3; inside verify_js_cookie == false");
+            //
+
+            return ValidationDecision::JsChallenge;
+        }
+    }
+
+    // ── PoW ──────────────────────────────
     if let Some(cookie_value) = extract_cookie_value(headers, COOKIE_NAME) {
         let (is_valid, suspicion_score) = state.is_verified_by_cookie(
             &cookie_value,
@@ -1214,7 +1292,7 @@ fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> Validati
         return ValidationDecision::RateLimited;
     }
 
-    ValidationDecision::Challenge
+    ValidationDecision::PowChallenge
 }
 
 async fn main_handler(
@@ -1222,11 +1300,7 @@ async fn main_handler(
     req: axum::http::Request<Body>,
 ) -> Response<Body> {
     let decision = decide_request(&state, &req);
-
-    match config::CONFIG.server.operation_mode {
-        config::OperationMode::Proxy => handle_proxy_mode(&state, decision, req).await,
-        config::OperationMode::ValidationOnly => handle_validation_only(decision),
-    }
+    handle_proxy_mode(&state, decision, req).await
 }
 
 async fn handle_proxy_mode(
@@ -1237,37 +1311,21 @@ async fn handle_proxy_mode(
     match decision {
         ValidationDecision::Allow => proxy_to_target(req).await,
 
-        ValidationDecision::Challenge => {
-            // let client_ip = get_client_ip(req.headers());
-            // let user_agent = get_user_agent(req.headers());
-
-            // let challenge = state.generate_challenge(client_ip, &user_agent);
-
-            // let mut context = Context::new();
-            // context.insert("nonce", &challenge.nonce);
-            // context.insert("difficulty", &challenge.difficulty);
-            // context.insert("expected_time", "10-60 seconds");
-            // context.insert("algorithm", &config::CONFIG.pow_challenge.algorithm);
-
-            // render_template(&state.templates, "challenge.html", &context)
-            //
-
-
-            render_challenge(state, req.headers())
+        ValidationDecision::JsChallenge => {
+            js_challenge_handler(State(state.clone()), req.headers().clone()).await
         }
 
+        ValidationDecision::PowChallenge => render_challenge(state, req.headers()),
         ValidationDecision::Blocked(msg) => {
             let mut ctx = Context::new();
             ctx.insert("message", msg);
             render_template(&state.templates, "blocked.html", &ctx)
         }
-
         ValidationDecision::Suspicious(score) => {
             let mut ctx = Context::new();
             ctx.insert("suspicion_score", &score);
             render_template(&state.templates, "suspicious.html", &ctx)
         }
-
         ValidationDecision::RateLimited => {
             let mut ctx = Context::new();
             ctx.insert("message", "Too many requests. Please try again later.");
@@ -1276,27 +1334,10 @@ async fn handle_proxy_mode(
     }
 }
 
-fn handle_validation_only(decision: ValidationDecision) -> Response<Body> {
-    match decision {
-        ValidationDecision::Allow => {
-            let mut resp = StatusCode::OK.into_response();
-            let header_name = axum::http::HeaderName::from_bytes(
-                format!("x-{}-verified", APPLICATION_NAME).as_bytes(),
-            )
-            .unwrap();
-            resp.headers_mut()
-                .insert(header_name, HeaderValue::from_static("true"));
-            resp
-        }
-
-        ValidationDecision::Challenge => StatusCode::UNAUTHORIZED.into_response(),
-        ValidationDecision::Blocked(_) => StatusCode::FORBIDDEN.into_response(),
-        ValidationDecision::Suspicious(_) => StatusCode::UNAUTHORIZED.into_response(),
-        ValidationDecision::RateLimited => StatusCode::TOO_MANY_REQUESTS.into_response(),
-    }
-}
-
-async fn challenge_handler(State(state): State<AppState>, headers: HeaderMap) -> Response<Body> {
+async fn pow_challenge_handler(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+) -> Response<Body> {
     render_challenge(&state, &headers)
 }
 
@@ -1312,7 +1353,148 @@ fn render_challenge(state: &AppState, headers: &HeaderMap) -> Response<Body> {
     context.insert("expected_time", "10-60 seconds");
     context.insert("algorithm", &config::CONFIG.pow_challenge.algorithm);
 
-    render_template(&state.templates, "challenge.html", &context)
+    render_template(&state.templates, "pow_challenge.html", &context)
+}
+
+async fn js_challenge_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let client_ip = get_client_ip(&headers);
+    let ua = get_user_agent(&headers);
+
+    // ephemeral token
+    let client_ip_str = client_ip.to_string();
+    let js_token_secret = config::CONFIG.server.js_token_secret.as_bytes();
+    let token = issue_js_token(js_token_secret, &client_ip_str, &ua);
+
+    let mut ctx = Context::new();
+    ctx.insert("js_token", &token);
+
+    render_template(&state.templates, "js_challenge.html", &ctx)
+}
+
+async fn verify_js(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Json(req): Json<JsVerifyRequest>,
+) -> Response {
+    let ip = get_client_ip(&headers);
+    let ua = get_user_agent(&headers);
+
+    let ip_str = ip.to_string();
+    let js_token_secret = config::CONFIG.server.js_token_secret.as_bytes();
+
+    //FIXME:
+    // const
+    if !verify_js_token(js_token_secret, &req.token, &ip_str, &ua, 120) {
+        return StatusCode::FORBIDDEN.into_response();
+    }
+
+    // Only here do we set the cookie
+    let cookie = issue_js_cookie(js_token_secret, &ip_str, &ua);
+
+    let mut resp = StatusCode::NO_CONTENT.into_response();
+    resp.headers_mut()
+        .append(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+    resp
+}
+
+pub fn verify_js_token(
+    secret: &[u8],
+    token: &str,
+    client_ip: &str,
+    user_agent: &str,
+    max_age_secs: u64,
+) -> bool {
+    use hmac::Mac;
+
+    let decoded = match URL_SAFE_NO_PAD.decode(token) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let s = match String::from_utf8(decoded) {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let parts: Vec<&str> = s.split('|').collect();
+    if parts.len() != 4 {
+        return false;
+    }
+
+    let ts: u64 = match parts[0].parse() {
+        Ok(v) => v,
+        Err(_) => return false,
+    };
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    if now.saturating_sub(ts) > max_age_secs {
+        return false;
+    }
+
+    let expected_ip = helpers::ip_prefix(client_ip);
+    let expected_ua = helpers::ua_hash(user_agent);
+
+    if parts[1] != expected_ip || parts[2] != expected_ua {
+        return false;
+    }
+
+    let payload = format!("{}|{}|{}", parts[0], parts[1], parts[2]);
+
+    let mut mac = HmacSha256::new_from_slice(secret).unwrap();
+    mac.update(payload.as_bytes());
+    let expected_sig = hex::encode(mac.finalize().into_bytes());
+
+    subtle::ConstantTimeEq::ct_eq(expected_sig.as_bytes(), parts[3].as_bytes()).into()
+}
+
+pub fn issue_js_token(secret: &[u8], client_ip: &str, user_agent: &str) -> String {
+    use hmac::Mac;
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let ip_pfx = helpers::ip_prefix(client_ip);
+    let ua_h = helpers::ua_hash(user_agent);
+
+    let payload = format!("{ts}|{ip_pfx}|{ua_h}");
+
+    let mut mac = HmacSha256::new_from_slice(secret).unwrap();
+    mac.update(payload.as_bytes());
+    let sig = hex::encode(mac.finalize().into_bytes());
+
+    let token = format!("{payload}|{sig}");
+    URL_SAFE_NO_PAD.encode(token)
+}
+
+pub fn issue_js_cookie(secret: &[u8], client_ip: &str, user_agent: &str) -> String {
+    use hmac::Mac;
+
+    let ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs();
+
+    let ip_pfx = helpers::ip_prefix(client_ip);
+    let ua_h = helpers::ua_hash(user_agent);
+
+    let payload = format!("{ts}|{ip_pfx}|{ua_h}");
+
+    let mut mac = HmacSha256::new_from_slice(secret).unwrap();
+    mac.update(payload.as_bytes());
+    let sig = hex::encode(mac.finalize().into_bytes());
+
+    let token = URL_SAFE_NO_PAD.encode(format!("{payload}|{sig}"));
+
+    format!(
+        "{}={}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax",
+        JS_ENABLED_COOKIE_NAME, token
+    )
 }
 
 #[tokio::main]
@@ -1322,7 +1504,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
 
     let _ = dotenvy::dotenv();
-
     let target_url: String =
         std::env::var("TARGET_URL").unwrap_or_else(|_| format!("https://{}", DEFAULT_TARGET_URL));
 
@@ -1336,7 +1517,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let (app, listen_interface) = match config::CONFIG.server.operation_mode {
         config::OperationMode::Proxy => (build_proxy_router(state), "0.0.0.0"),
-        config::OperationMode::ValidationOnly => (build_validation_router(state), "127.0.0.1"),
+        config::OperationMode::ValidationOnly => (build_validation_only_router(state), "127.0.0.1"),
     };
 
     let port = cli_port()
@@ -1354,14 +1535,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
     println!("Features enabled:");
     println!("  - Dynamic PoW difficulty (base: {})", BASE_DIFFICULTY);
-    println!("  - Cookie-based tracking ({} days)", COOKIE_DURATION_DAYS);
+    println!(
+        "  - Cookie-based tracking ({} days)",
+        config::CONFIG.pow_challenge.cookie_duration_days
+    );
     println!("  - Behavioral analysis & honeypots");
     println!(
         "  - Rate limiting ({} req/{}min)",
         MAX_REQUESTS_PER_WINDOW, RATE_LIMIT_WINDOW_MINUTES
     );
     println!("  - IP reputation tracking");
-    println!("Admin stats: http://localhost:{}/admin/stats", port);
+    // println!("Admin stats: http://localhost:{}/admin/stats", port);
 
     let listener = TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;
