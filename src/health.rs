@@ -1,0 +1,12 @@
+use axum::{Json, http::StatusCode, response::IntoResponse};
+use serde::Serialize;
+
+#[derive(Serialize)]
+struct Health {
+    status: &'static str,
+}
+
+pub async fn health() -> impl IntoResponse {
+    let h = Health { status: "ok" };
+    (StatusCode::OK, Json(h))
+}

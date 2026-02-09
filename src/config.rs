@@ -74,6 +74,22 @@ struct PersistenceConfig {
     sqlite_path: String,
 }
 
+#[derive(Clone, Deserialize)]
+pub struct AdminConfig {
+    pub user_name: String,
+    pub password: String,
+    pub cookie_validity_in_days: Option<u64>,
+}
+
+impl std::fmt::Debug for AdminConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AdminConfig")
+            .field("user_name", &self.user_name)
+            .field("password", &"<redacted>")
+            .finish()
+    }
+}
+
 #[derive(Debug, Clone, Deserialize)]
 pub struct Config {
     pub server: ServerConfig,
@@ -81,6 +97,7 @@ pub struct Config {
     pub traps: TrapConfig,
     pub target: TargetConfig,
     pub persistence: PersistenceConfig,
+    pub admin: AdminConfig,
 }
 
 fn load_config<P: AsRef<Path>>(path: P) -> anyhow::Result<Config> {

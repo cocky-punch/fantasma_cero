@@ -1,0 +1,42 @@
+body {
+    margin: 0;
+    font:
+        14px system-ui,
+        sans-serif;
+    background: #fff;
+    color: #111;
+}
+
+header {
+    border-bottom: 2px solid #000;
+    padding: 12px 16px;
+    display: flex;
+    justify-content: space-between;
+}
+
+section {
+    border: 1px solid #000;
+    margin: 16px;
+    padding: 12px;
+}
+
+h2 {
+    margin: 0 0 8px 0;
+    font-size: 15px;
+}
+
+table {
+    width: 100%;
+    border-collapse: collapse;
+}
+
+th,
+td {
+    border-bottom: 1px solid #ccc;
+    padding: 4px 6px;
+    text-align: left;
+}
+
+.mono {
+    font-family: monospace;
+}

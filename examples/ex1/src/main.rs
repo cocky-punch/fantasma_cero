@@ -50,9 +50,9 @@ async fn main() {
     println!();
     println!("🔒 SECURITY: Localhost binding (127.0.0.1)");
     println!("   ✅ Not accessible from internet directly");
-    println!("   ✅ Only accessible through Fantasma-One proxy");
+    println!("   ✅ Only accessible through Fantasma-Cero proxy");
     println!();
-    println!("📝 Access via: http://localhost:3000 (through Fantasma-One)");
+    println!("📝 Access via: http://localhost:3000 (through Fantasma-Cero)");
 
     let listener = TcpListener::bind(addr).await.unwrap();
     axum::serve(listener, app).await.unwrap();

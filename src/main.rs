@@ -25,16 +25,15 @@ use tower_http::cors::CorsLayer;
 use tracing_subscriber;
 use uuid::Uuid;
 
+mod admin;
 mod config;
+mod health;
 mod helpers;
+mod metrics;
 
 const COOKIE_NAME: &str = "fantasma0_verified";
 const JS_ENABLED_COOKIE_NAME: &str = "fantasma0_js_ok";
 type HmacSha256 = hmac::Hmac<sha2::Sha256>;
-
-// days
-//TODO - into config
-// const COOKIE_DURATION_DAYS: u64 = 1;
 
 //TODO
 const RATE_LIMIT_WINDOW_MINUTES: u64 = 999;
@@ -48,6 +47,7 @@ const SUSPICION_THRESHOLD: u32 = 40;
 static HOST_HEADER: axum::http::HeaderName = axum::http::HeaderName::from_static("host");
 const DEFAULT_PORT: u16 = 8080;
 const APPLICATION_NAME: &'static str = "fantasma0";
+const ADMIN_BACKEND_URL_PREFIX: &'static str = "/fantasma0";
 
 #[derive(Clone)]
 struct AppState {
@@ -460,7 +460,9 @@ impl AppState {
                 config::CONFIG.pow_challenge.cookie_duration_days
             );
 
-            if now - client.created_at > config::CONFIG.pow_challenge.cookie_duration_days * 24 * 3600 {
+            if now - client.created_at
+                > config::CONFIG.pow_challenge.cookie_duration_days * 24 * 3600
+            {
                 eprintln!("❌ [COOKIE_VERIFY] Token expired");
                 return (false, 0);
             }
@@ -1013,9 +1015,9 @@ async fn honeypot_route(State(state): State<AppState>, headers: HeaderMap) -> im
     render_template(&state.templates, "404.html", &context)
 }
 
-async fn health_check() -> impl IntoResponse {
-    "Fantasma0 is running"
-}
+// async fn health_check() -> impl IntoResponse {
+//     "Fantasma0 is running"
+// }
 
 async fn admin_stats(State(state): State<AppState>) -> impl IntoResponse {
     let ip_tracking = state.ip_tracking.read().unwrap();
@@ -1204,7 +1206,6 @@ fn build_validation_only_router(state: AppState) -> Router {
         .route("/verify_js", post(verify_js))
         .route("/verify_pow", post(verify_pow))
         // others
-        .route("/health", get(health_check))
         .with_state(state)
 }
 
@@ -1215,7 +1216,6 @@ fn build_proxy_router(state: AppState) -> Router {
         .route("/verify_pow", post(verify_pow))
         // others
         .route("/robots.txt", get(robots_txt))
-        .route("/health", get(health_check))
         // TODO: with "poison bots" option; to be implemented
         // .route("/wp-admin", get(honeypot_route))
         .route("/", axum::routing::any(main_handler))
@@ -1234,8 +1234,12 @@ enum ValidationDecision {
 }
 
 fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> ValidationDecision {
-    let headers = req.headers();
+    let path = req.uri().path();
+    if path.starts_with(ADMIN_BACKEND_URL_PREFIX) {
+        return ValidationDecision::Allow;
+    }
 
+    let headers = req.headers();
     let client_ip = get_client_ip(headers);
     let user_agent = get_user_agent(headers);
     let tls_fingerprint = get_tls_fingerprint(headers);
@@ -1515,10 +1519,34 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
-    let (app, listen_interface) = match config::CONFIG.server.operation_mode {
+    let (waf_routes, listen_interface) = match config::CONFIG.server.operation_mode {
         config::OperationMode::Proxy => (build_proxy_router(state), "0.0.0.0"),
         config::OperationMode::ValidationOnly => (build_validation_only_router(state), "127.0.0.1"),
     };
+
+    let additional_routes = Router::new()
+        .route("/health", get(health::health))
+        .route("/metrics", get(metrics::metrics));
+
+    // FIXME
+    let admin_state = admin::state::AdminState::new(admin::types::ConfigSnapshot {
+        js_check_enabled: false,
+        pow_difficulty: 5,
+        cookie_ttl_sec: 999,
+        rate_limit_rps: 999,
+    });
+
+    let admin_ctx = admin::router::AdminCtx {
+        admin: admin_state.clone(),
+        mode: "proxy".into(),
+        version: env!("CARGO_PKG_VERSION").into(),
+    };
+
+    let admin_router = admin::router::build_router(admin_ctx);
+    let app = Router::new()
+        .merge(waf_routes)
+        .nest(ADMIN_BACKEND_URL_PREFIX, admin_router)
+        .nest(ADMIN_BACKEND_URL_PREFIX, additional_routes);
 
     let port = cli_port()
         .or_else(env_port)
@@ -1527,7 +1555,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = format!("{}:{}", listen_interface, port);
 
-    println!("Fantasma0 Enhanced starting on {}", addr);
+    println!("Fantasma0 Enhanced starting on http://{}", addr);
     println!("Operation mode: {:?}", config::CONFIG.server.operation_mode);
     println!(
         "Target URL: {}",

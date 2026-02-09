@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+    <head>
+        <meta charset="UTF-8" />
+        <title>Admin Sign-In</title>
+        <style>
+            body {
+                margin: 0;
+                font-family: Arial, Helvetica, sans-serif;
+                background: #ffffff;
+                height: 100vh;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+            }
+
+            .login-box {
+                width: 320px;
+                padding: 28px 26px 26px 26px;
+                border: 1px solid #d8d8d8;
+                border-radius: 6px;
+                box-shadow: 0 2px 8px rgba(0, 0, 0, 0.05);
+                background: #fffdf2; /* very light yellow */
+            }
+
+            .login-box h2 {
+                margin: 0 0 18px 0;
+                text-align: center;
+                font-weight: 600;
+                font-size: 20px;
+                color: #333;
+            }
+
+            .field {
+                margin-bottom: 14px;
+                display: flex;
+                flex-direction: column;
+            }
+
+            label {
+                font-size: 13px;
+                margin-bottom: 4px;
+                color: #555;
+            }
+
+            input[type="text"],
+            input[type="password"] {
+                padding: 8px 9px;
+                border: 1px solid #cfcfcf;
+                border-radius: 4px;
+                font-size: 14px;
+                outline: none;
+            }
+
+            input:focus {
+                border-color: #999;
+            }
+
+            .submit-row {
+                margin-top: 16px;
+                text-align: center;
+            }
+
+            button {
+                padding: 8px 18px;
+                font-size: 14px;
+                border-radius: 4px;
+                cursor: pointer;
+                width: 100%;
+            }
+
+            .footer-note {
+                margin-top: 14px;
+                font-size: 12px;
+                text-align: center;
+                color: #777;
+            }
+
+            .err {
+                margin-top: 12px;
+                color: #c00;
+                font-size: 14px;
+                text-align: center;
+            }
+        </style>
+    </head>
+    <body>
+        <form method="post" action="/fantasma0/admin/sign_in" class="login-box">
+            <h2>Admin Sign-In</h2>
+
+            <div class="field">
+                <label for="user">Login</label>
+                <input id="user" name="user" type="text" required />
+            </div>
+
+            <div class="field">
+                <label for="pass">Password</label>
+                <input id="pass" name="pass" type="password" required />
+            </div>
+
+            <div class="submit-row">
+                <button type="submit">Sign In</button>
+            </div>
+
+            {{error}}
+        </form>
+    </body>
+</html>
