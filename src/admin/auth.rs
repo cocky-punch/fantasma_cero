@@ -21,6 +21,13 @@ pub struct SignInForm {
 
 static SIGN_IN_HTML: &str = include_str!("../web_ui/admin/sign_in.html");
 
+fn generate_token() -> String {
+    use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+
+    let bytes: [u8; 32] = rand::random();
+    URL_SAFE_NO_PAD.encode(bytes)
+}
+
 fn render_sign_in(error: Option<&str>) -> axum::response::Html<String> {
     let err_block = match error {
         Some(msg) => format!(r#"<div class="err">{}</div>"#, msg),
@@ -34,17 +41,34 @@ pub async fn sign_in_page() -> Html<String> {
     render_sign_in(None)
 }
 
-pub async fn sign_in_post(jar: CookieJar, Form(form): Form<SignInForm>) -> impl IntoResponse {
-    // if form.user == ADMIN_USER && form.pass == ADMIN_PASS {
+pub async fn sign_in_post(
+    axum::extract::State(ctx): axum::extract::State<router::AdminCtx>,
+    jar: CookieJar,
+    Form(form): Form<SignInForm>,
+) -> impl IntoResponse {
     if form.user == CONFIG.admin.user_name && form.pass == CONFIG.admin.password {
-        let cookie = Cookie::build((COOKIE_NAME, "1"))
-            .path("/fantasma0/admin") // TODO: config
+        let auth_token = generate_token();
+        // TODO: config
+        ctx.admin
+            // FIXME - the same "Duration" - either time, or std
+            .insert_auth_session(
+                auth_token.clone(),
+                std::time::Duration::from_secs(60 * 60 * 24 * 3),
+            )
+            .await;
+
+        let cookie = Cookie::build((COOKIE_NAME, auth_token))
+            .path(CONFIG.admin.base_path_prefix.clone()) // TODO: config
             .max_age(Duration::days(3)) // TODO: config
             .same_site(SameSite::Lax)
             .http_only(true)
             .finish();
 
-        return (jar.add(cookie), Redirect::to("/fantasma0/admin")).into_response();
+        return (
+            jar.add(cookie),
+            Redirect::to(&CONFIG.admin.base_path_prefix),
+        )
+            .into_response();
     }
 
     // invalid credentials
@@ -61,9 +85,11 @@ pub async fn require_admin(
     req: Request<Body>,
     next: Next,
 ) -> impl IntoResponse {
-    if jar.get(COOKIE_NAME).is_some() {
-        next.run(req).await
-    } else {
-        Redirect::to("/fantasma0/admin/sign_in").into_response()
+    if let Some(cookie) = jar.get(COOKIE_NAME) {
+        if ctx.admin.is_valid(cookie.value()).await {
+            return next.run(req).await;
+        }
     }
+
+    Redirect::to(&format!("{}/sign_in", CONFIG.admin.base_path_prefix)).into_response()
 }

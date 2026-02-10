@@ -122,22 +122,85 @@
                 padding: 15px;
                 margin: 20px 0;
             }
+
+            .challenge-box-img {
+                display: flex;
+                justify-content: center; /* Centers horizontally */
+                align-items: center; /* Centers vertically */
+                height: 200px; /* Example height - container needs a defined height */
+            }
         </style>
     </head>
     <body>
         <div class="container">
-            <h1>Security Verification Required</h1>
-            <p>To protect against automated access, complete this verification challenge. Or don't if you're a bot.</p>
+            <h1 style="text-align: center">Security Verification Required</h1>
+            <!--
+                <p>To protect against automated access, complete this verification challenge. Or don't if you're a bot.
+                </p>
+            -->
 
+            <!--
             <div class="challenge-box">
                 <strong>Challenge ID:</strong> {{ nonce }}<br />
                 <strong>Difficulty Level:</strong> {{ difficulty }}<br />
                 <strong>Algorithm:</strong> {{ algorithm }}<br />
                 <strong>Expected Time:</strong> {{ expected_time }}
             </div>
+            -->
+
+            <div class="challenge-box-img">
+                <svg width="220" height="220" viewBox="0 0 220 220" xmlns="http://www.w3.org/2000/svg">
+                    <defs>
+                        <linearGradient id="metal2" x1="0" y1="0" x2="0" y2="1">
+                            <stop offset="0%" stop-color="#eeeeee" />
+                            <stop offset="100%" stop-color="#9a9a9a" />
+                        </linearGradient>
+                    </defs>
+
+                    <!-- Antenna -->
+                    <line x1="110" y1="45" x2="110" y2="22" stroke="#444" stroke-width="3" />
+                    <circle cx="110" cy="18" r="5" fill="#ff4d4d" />
+
+                    <!-- Head -->
+                    <rect
+                        x="40"
+                        y="45"
+                        width="140"
+                        height="120"
+                        rx="16"
+                        fill="url(#metal2)"
+                        stroke="#333"
+                        stroke-width="3"
+                    />
+
+                    <!-- Eyes -->
+                    <circle cx="85" cy="100" r="12" fill="#222" />
+                    <circle cx="135" cy="100" r="12" fill="#222" />
+                    <circle cx="82" cy="96" r="3" fill="#fff" />
+                    <circle cx="132" cy="96" r="3" fill="#fff" />
+
+                    <!-- mouth -->
+                    <ellipse cx="110" cy="140" rx="38" ry="18" fill="#330000" stroke="#111" stroke-width="2" />
+
+                    <!-- Teeth -->
+                    <polygon points="78,138 88,138 83,150" fill="#ff3b3b" />
+                    <polygon points="92,138 102,138 97,150" fill="#ff3b3b" />
+                    <polygon points="106,138 116,138 111,150" fill="#ff3b3b" />
+                    <polygon points="120,138 130,138 125,150" fill="#ff3b3b" />
+                    <polygon points="134,138 144,138 139,150" fill="#ff3b3b" />
+
+                    <!-- Fangs -->
+                    <polygon points="74,138 82,138 78,156" fill="#ff0000" />
+                    <polygon points="138,138 146,138 142,156" fill="#ff0000" />
+
+                    <!-- Bolts -->
+                    <circle cx="40" cy="105" r="4" fill="#666" />
+                    <circle cx="180" cy="105" r="4" fill="#666" />
+                </svg>
+            </div>
 
             <div class="status" id="status">
-                Click "Start Verification" to begin. Keep this tab active during the process.
+                To protect against automated access, complete this verification challenge. Or don't if you're a bot.
             </div>
 
             <div class="progress-bar">

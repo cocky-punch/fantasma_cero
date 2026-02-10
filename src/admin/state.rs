@@ -1,7 +1,10 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     net::IpAddr,
+
+    // sync::{Arc, RwLock},
     sync::Arc,
+
     time::{Duration, Instant},
 };
 
@@ -10,6 +13,7 @@ use tokio::sync::RwLock;
 
 #[derive(Clone)]
 pub struct AdminState {
+    pub auth_sessions: Arc<RwLock<HashMap<String, Instant>>>,
     pub started_at: Instant,
     pub inner: Arc<RwLock<AdminInner>>,
 }
@@ -31,6 +35,8 @@ impl AdminState {
                 suspicious: Vec::new(),
                 config_snapshot,
             })),
+
+            auth_sessions: Arc::new(RwLock::new(HashMap::new())),
         }
     }
 
@@ -40,5 +46,30 @@ impl AdminState {
             g.recent.pop_front();
         }
         g.recent.push_back(ev);
+    }
+
+    pub async fn insert_auth_session(&self, token: String, ttl: Duration) {
+        // let mut map = self.auth_sessions.write().unwrap();
+        let mut map = self.auth_sessions.write().await;
+        map.insert(token, Instant::now() + ttl);
+    }
+
+    pub async fn is_valid(&self, token: &str) -> bool {
+        // let map = self.auth_sessions.read().unwrap();
+        let map = self.auth_sessions.read().await;
+
+        if let Some(expiry) = map.get(token) {
+            *expiry > Instant::now()
+        } else {
+            false
+        }
+    }
+
+    pub async fn cleanup(&self) {
+        let now = Instant::now();
+        // let mut map = self.auth_sessions.write().unwrap();
+        let mut map = self.auth_sessions.write().await;
+
+        map.retain(|_, exp| *exp > now);
     }
 }

@@ -69,7 +69,7 @@ enum PersistenceConfigBackend {
 }
 
 #[derive(Debug, Deserialize, Clone)]
-struct PersistenceConfig {
+pub struct PersistenceConfig {
     backend: PersistenceConfigBackend,
     sqlite_path: String,
 }
@@ -79,6 +79,7 @@ pub struct AdminConfig {
     pub user_name: String,
     pub password: String,
     pub cookie_validity_in_days: Option<u64>,
+    pub base_path_prefix: String,
 }
 
 impl std::fmt::Debug for AdminConfig {

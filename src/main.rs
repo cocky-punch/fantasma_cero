@@ -1,7 +1,7 @@
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
-    extract::{Form, Query, State},
+    extract::{Form, State},
     http::{HeaderMap, HeaderValue, Request, StatusCode, header},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
@@ -59,6 +59,7 @@ struct AppState {
     concurrent_usage: Arc<RwLock<HashMap<String, Vec<ActiveSession>>>>,
     target_url: String,
     templates: Tera,
+    waf_metrics: Arc<metrics::WafMetrics>,
 
     #[cfg(feature = "persist-sqlite")]
     token_store: Option<Arc<crate::persistence::TokenDbStore>>,
@@ -158,6 +159,7 @@ impl AppState {
             concurrent_usage: Arc::new(RwLock::new(HashMap::new())),
             target_url,
             templates: tera,
+            waf_metrics: Arc::new(metrics::WafMetrics::default()), //TODO - load the historical data from the Db
 
             #[cfg(feature = "persist-sqlite")]
             token_store,
@@ -325,10 +327,7 @@ impl AppState {
     }
 
     fn verify_pow_argon2(&self, nonce: &str, solution: u64, submission: &PoWSubmission) -> bool {
-        use argon2::{
-            Algorithm, Argon2, Params, Version,
-            password_hash::{PasswordHash, PasswordHasher, PasswordVerifier, SaltString},
-        };
+        use argon2::{Algorithm, Argon2, Params, Version};
 
         let mut challenges = self.challenges.write().unwrap();
         if let Some(challenge) = challenges.remove(nonce) {
@@ -1243,11 +1242,16 @@ fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> Validati
     let client_ip = get_client_ip(headers);
     let user_agent = get_user_agent(headers);
     let tls_fingerprint = get_tls_fingerprint(headers);
-
     let browser_fp = headers
         .get("x-browser-fingerprint")
         .and_then(|v| v.to_str().ok())
         .unwrap_or("");
+
+    //update the metrics
+    state
+        .waf_metrics
+        .total_requests
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     if state.is_ip_blocked(client_ip) {
         return ValidationDecision::Blocked("Your IP has been blocked due to suspicious activity.");
@@ -1541,6 +1545,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         mode: "proxy".into(),
         version: env!("CARGO_PKG_VERSION").into(),
     };
+
+    //
+    //TODO - run admin bg task
+    // let admin_state_clone = admin_state.clone();
+    // tokio::spawn(async move {
+    //     let mut interval = tokio::time::interval(Duration::from_secs(300));
+    //     loop {
+    //         interval.tick().await;
+    //         admin_state_clone.cleanup();
+    //     }
+    // });
+    //
 
     let admin_router = admin::router::build_router(admin_ctx);
     let app = Router::new()
