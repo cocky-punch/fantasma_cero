@@ -48,6 +48,8 @@ Edit the one you need accordingly: port, host, etc; copy it into or merge with y
 - [x] option "JS must be enabled/supported"
 - [ ] poison AI-LLM scrapers with fake data
 - [ ] different PoW difficulty per route
-- [ ] admin dashboards
+- [x] basic admin backend and metrics
 - [ ] attribution of AI-LLM scrapers
 - [ ] ASN-based decisions and bans
+- [x] skippable URL paths
+- [ ] error reports, feedback

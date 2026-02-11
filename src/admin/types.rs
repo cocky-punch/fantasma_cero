@@ -1,20 +1,6 @@
 use serde::Serialize;
 use std::net::IpAddr;
 
-#[derive(Default, Serialize, Clone)]
-pub struct Metrics {
-    pub rps: u32,
-    pub allowed: u64,
-    pub blocked: u64,
-    pub rate_limited: u64,
-
-    pub js_hits: u64,
-    pub js_fail: u64,
-
-    pub pow_hits: u64,
-    pub pow_fail: u64,
-}
-
 #[derive(Serialize, Clone)]
 pub struct RecentEvent {
     pub ts: String,

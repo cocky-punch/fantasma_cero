@@ -9,22 +9,24 @@ pub struct StatusResp {
 
 #[derive(Serialize)]
 pub struct MetricsResp {
-    pub rps: u32,
-    pub allowed_pct: u32,
-    pub js: JsResp,
-    pub pow: PowResp,
+    pub total: u64,
+    pub allowed: u64,
     pub blocked: u64,
-    pub rate_limited: u64,
-}
+    pub allowed_pct: u32,
 
-#[derive(Serialize)]
-pub struct JsResp {
-    pub hits: u64,
-    pub fail_pct: u32,
+    pub pow: PowResp,
 }
 
 #[derive(Serialize)]
 pub struct PowResp {
+    pub challenges: u64,
+    pub passed: u64,
+    pub failed: u64,
+    pub fail_pct: u32,
+}
+
+#[derive(Serialize)]
+pub struct JsResp {
     pub hits: u64,
     pub fail_pct: u32,
 }

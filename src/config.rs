@@ -10,14 +10,13 @@ const MAX_DIFFICULTY: u64 = 6; // ~30-60 seconds
 #[derive(Debug, Clone, Deserialize)]
 pub struct ServerConfig {
     pub port: Option<u16>,
-    //TODO
-    // remove for now
-    // pub jwt_secret: String,
-    // pub hmac_secret: String,
-    //
     pub js_check_enabled: bool,
     pub js_token_secret: String,
     pub operation_mode: OperationMode,
+
+    //these URL-s must not be checked
+    pub skip_paths: Vec<String>,
+    pub skip_extensions: Vec<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, serde::Serialize)]
@@ -107,17 +106,14 @@ fn load_config<P: AsRef<Path>>(path: P) -> anyhow::Result<Config> {
     Ok(config)
 }
 
-// pub static CONFIG: Lazy<Arc<Config>> = Lazy::new(|| {
-//     let cfg = load_config("config.toml").expect("failed to load config");
-//     Arc::new(cfg)
-// });
-
-//DEBUG
 pub static CONFIG: Lazy<Arc<Config>> = Lazy::new(|| {
+    //let cfg = load_config("config.toml").expect("failed to load config");
+    //DEBUG
     let cfg = load_config("config.toml").unwrap_or_else(|e| {
         eprintln!("ERROR loading config: {}", e);
         eprintln!("Current dir: {:?}", std::env::current_dir());
         panic!("Config load failed");
     });
+
     Arc::new(cfg)
 });

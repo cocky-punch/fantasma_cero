@@ -1,3 +1,8 @@
+use std::{
+    sync::{Arc, RwLock},
+    time::Instant,
+};
+
 use axum::{
     Json, Router,
     extract::State,
@@ -5,22 +10,22 @@ use axum::{
     routing::{get, post},
 };
 use serde::Serialize;
-use std::time::Instant;
 
 use super::api_types::{JsResp, MetricsResp, PowResp, StatusResp};
 use super::auth;
 use super::state::AdminState;
-use super::types::{ConfigSnapshot, Metrics, RecentEvent, SuspiciousIp};
+use super::types::{ConfigSnapshot, RecentEvent, SuspiciousIp};
 
 #[derive(Clone)]
 pub struct AdminCtx {
     pub admin: AdminState,
+    pub waf_metrics: Arc<crate::metrics::WafMetrics>,
     pub mode: String,
     pub version: String,
 }
 
-const ADMIN_INDEX: &str = include_str!("../web_ui/admin//index.html");
-const ADMIN_STYLE: &str = include_str!("../web_ui/admin//style.css");
+const ADMIN_INDEX: &str = include_str!("../web_ui/admin/index.html");
+const ADMIN_STYLE: &str = include_str!("../web_ui/admin/style.css");
 const ADMIN_APP_JS: &str = include_str!("../web_ui/admin/app.js");
 const ADMIN_URL_PREFIX: &str = "/admin";
 
@@ -68,32 +73,41 @@ async fn status(State(ctx): State<AdminCtx>) -> Json<StatusResp> {
 }
 
 async fn metrics(State(ctx): State<AdminCtx>) -> Json<MetricsResp> {
-    let g = ctx.admin.inner.read().await;
-    let m = &g.metrics;
+    use std::sync::atomic::Ordering;
 
-    let total = m.allowed + m.blocked + m.rate_limited;
+    let m = &ctx.waf_metrics;
+
+    let total = m.total_requests.load(Ordering::Relaxed);
+    let allowed = m.allowed_requests.load(Ordering::Relaxed);
+    let blocked = m.blocked_requests.load(Ordering::Relaxed);
+
+    let pow_challenges = m.pow_challenges.load(Ordering::Relaxed);
+    let pow_passed = m.pow_passed.load(Ordering::Relaxed);
+    let pow_failed = m.pow_failed.load(Ordering::Relaxed);
+
     let allowed_pct = if total == 0 {
         100
     } else {
-        ((m.allowed * 100) / total) as u32
+        ((allowed * 100) / total) as u32
     };
 
-    let js_fail_pct = pct(m.js_fail, m.js_hits);
-    let pow_fail_pct = pct(m.pow_fail, m.pow_hits);
+    let pow_fail_pct = if pow_challenges == 0 {
+        0
+    } else {
+        ((pow_failed * 100) / pow_challenges) as u32
+    };
 
     Json(MetricsResp {
-        rps: m.rps,
+        total,
+        allowed,
+        blocked,
         allowed_pct,
-        js: JsResp {
-            hits: m.js_hits,
-            fail_pct: js_fail_pct,
-        },
         pow: PowResp {
-            hits: m.pow_hits,
+            challenges: pow_challenges,
+            passed: pow_passed,
+            failed: pow_failed,
             fail_pct: pow_fail_pct,
         },
-        blocked: m.blocked,
-        rate_limited: m.rate_limited,
     })
 }
 
@@ -110,14 +124,6 @@ async fn suspicious(State(ctx): State<AdminCtx>) -> Json<Vec<SuspiciousIp>> {
 async fn config(State(ctx): State<AdminCtx>) -> Json<ConfigSnapshot> {
     let g = ctx.admin.inner.read().await;
     Json(g.config_snapshot.clone())
-}
-
-fn pct(fail: u64, total: u64) -> u32 {
-    if total == 0 {
-        0
-    } else {
-        ((fail * 100) / total) as u32
-    }
 }
 
 async fn ui_index() -> Html<&'static str> {

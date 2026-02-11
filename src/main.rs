@@ -44,7 +44,6 @@ const BASE_DIFFICULTY: u32 = 4;
 const MAX_DIFFICULTY: u32 = 7;
 const DEFAULT_TARGET_URL: &'static str = "example.com";
 const SUSPICION_THRESHOLD: u32 = 40;
-static HOST_HEADER: axum::http::HeaderName = axum::http::HeaderName::from_static("host");
 const DEFAULT_PORT: u16 = 8080;
 const APPLICATION_NAME: &'static str = "fantasma0";
 const ADMIN_BACKEND_URL_PREFIX: &'static str = "/fantasma0";
@@ -59,6 +58,12 @@ struct AppState {
     concurrent_usage: Arc<RwLock<HashMap<String, Vec<ActiveSession>>>>,
     target_url: String,
     templates: Tera,
+
+    //URL-s and paths that get skipped from PoW, any checks
+    skip_exact_urls: Vec<String>,
+    skip_prefix_urls: Vec<String>,
+    skip_extention_urls: Vec<String>,
+    //
     waf_metrics: Arc<metrics::WafMetrics>,
 
     #[cfg(feature = "persist-sqlite")]
@@ -150,16 +155,47 @@ impl AppState {
             None
         };
 
+        //---
+        // URLs to skip
+        let mut skip_exact_urls = Vec::new();
+        let mut skip_prefix_urls = Vec::new();
+        let mut skip_extention_urls = Vec::new();
+
+        for p in &config::CONFIG.server.skip_paths {
+            if p.ends_with('/') {
+                skip_prefix_urls.push(p.clone());
+            } else {
+                skip_exact_urls.push(p.clone());
+            }
+        }
+
+        for ext in &config::CONFIG.server.skip_extensions {
+            let e = if ext.starts_with('.') {
+                ext.clone()
+            } else {
+                format!(".{}", ext)
+            };
+
+            skip_extention_urls.push(e.to_ascii_lowercase());
+        }
+        //---
+
         Ok(Self {
-            challenges: Arc::new(RwLock::new(HashMap::new())),
-            verified_tokens: Arc::new(RwLock::new(HashMap::new())),
-            ip_tracking: Arc::new(RwLock::new(HashMap::new())),
-            rate_limits: Arc::new(RwLock::new(HashMap::new())),
-            honeypots: Arc::new(RwLock::new(HashMap::new())),
-            concurrent_usage: Arc::new(RwLock::new(HashMap::new())),
+            challenges: Default::default(),
+            verified_tokens: Default::default(),
+            ip_tracking: Default::default(),
+            rate_limits: Default::default(),
+            honeypots: Default::default(),
+            concurrent_usage: Default::default(),
             target_url,
             templates: tera,
-            waf_metrics: Arc::new(metrics::WafMetrics::default()), //TODO - load the historical data from the Db
+
+            //TODO - load the historical data from the Db
+            waf_metrics: Default::default(),
+
+            skip_exact_urls,
+            skip_prefix_urls,
+            skip_extention_urls,
 
             #[cfg(feature = "persist-sqlite")]
             token_store,
@@ -730,6 +766,25 @@ impl AppState {
         // FIXME: const
         verify_js_token(js_token_secret, &cookie_value, &ip_str, ua, 120)
     }
+
+    pub fn is_url_path_skipped(&self, path: &str) -> bool {
+        let lowered_path = path.to_ascii_lowercase();
+        if self.skip_exact_urls.iter().any(|p| *p == lowered_path) {
+            return true;
+        }
+
+        if self
+            .skip_prefix_urls
+            .iter()
+            .any(|p| lowered_path.starts_with(p))
+        {
+            return true;
+        }
+
+        self.skip_extention_urls
+            .iter()
+            .any(|ext| lowered_path.ends_with(ext))
+    }
 }
 
 fn get_client_ip(headers: &HeaderMap) -> IpAddr {
@@ -992,6 +1047,12 @@ async fn verify_pow(
             config::CONFIG.pow_challenge.cookie_duration_days * 24 * 3600
         );
 
+        //update the metrics
+        state
+            .waf_metrics
+            .pow_passed
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         let mut response = StatusCode::OK.into_response();
         response.headers_mut().insert(
             header::SET_COOKIE,
@@ -1000,6 +1061,12 @@ async fn verify_pow(
 
         response
     } else {
+        //update the metrics
+        state
+            .waf_metrics
+            .pow_failed
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+
         state.update_ip_behavior(client_ip, &user_agent, true);
         StatusCode::BAD_REQUEST.into_response()
     }
@@ -1234,9 +1301,17 @@ enum ValidationDecision {
 
 fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> ValidationDecision {
     let path = req.uri().path();
-    if path.starts_with(ADMIN_BACKEND_URL_PREFIX) {
+
+    //TODO - merge with "_skipped(...)"
+    // remove
+    // if path.starts_with(ADMIN_BACKEND_URL_PREFIX) {
+    //     return ValidationDecision::Allow;
+    // }
+
+    if state.is_url_path_skipped(path) {
         return ValidationDecision::Allow;
     }
+    //
 
     let headers = req.headers();
     let client_ip = get_client_ip(headers);
@@ -1299,6 +1374,12 @@ fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> Validati
     if !state.check_rate_limit(client_ip) {
         return ValidationDecision::RateLimited;
     }
+
+    //update the metrics
+    state
+        .waf_metrics
+        .pow_challenges
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
     ValidationDecision::PowChallenge
 }
@@ -1507,15 +1588,9 @@ pub fn issue_js_cookie(secret: &[u8], client_ip: &str, user_agent: &str) -> Stri
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    //TODO
-    // tracing_subscriber::init();
     tracing_subscriber::fmt::init();
-
     let _ = dotenvy::dotenv();
-    let target_url: String =
-        std::env::var("TARGET_URL").unwrap_or_else(|_| format!("https://{}", DEFAULT_TARGET_URL));
-
-    let state = match AppState::new(target_url) {
+    let app_state = match AppState::new(config::CONFIG.target.origin_url.clone()) {
         Ok(x) => x,
         Err(e) => {
             eprintln!("Failed to initialize templates: {}", e);
@@ -1523,9 +1598,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    let waf_metrics = app_state.waf_metrics.clone();
     let (waf_routes, listen_interface) = match config::CONFIG.server.operation_mode {
-        config::OperationMode::Proxy => (build_proxy_router(state), "0.0.0.0"),
-        config::OperationMode::ValidationOnly => (build_validation_only_router(state), "127.0.0.1"),
+        config::OperationMode::Proxy => (build_proxy_router(app_state), "0.0.0.0"),
+        config::OperationMode::ValidationOnly => {
+            (build_validation_only_router(app_state), "127.0.0.1")
+        }
     };
 
     let additional_routes = Router::new()
@@ -1541,13 +1619,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     });
 
     let admin_ctx = admin::router::AdminCtx {
-        admin: admin_state.clone(),
-        mode: "proxy".into(),
+        admin: admin_state,
+        waf_metrics: waf_metrics,
+        mode: format!("{:?}", config::CONFIG.server.operation_mode),
         version: env!("CARGO_PKG_VERSION").into(),
     };
 
     //
-    //TODO - run admin bg task
+    //TODO - run the admin bg task
     // let admin_state_clone = admin_state.clone();
     // tokio::spawn(async move {
     //     let mut interval = tokio::time::interval(Duration::from_secs(300));
@@ -1573,10 +1652,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Fantasma0 Enhanced starting on http://{}", addr);
     println!("Operation mode: {:?}", config::CONFIG.server.operation_mode);
-    println!(
-        "Target URL: {}",
-        std::env::var("TARGET_URL").unwrap_or_else(|_| format!("https://{}", DEFAULT_TARGET_URL))
-    );
+    println!("Target URL: {}", config::CONFIG.target.origin_url);
     println!("Features enabled:");
     println!("  - Dynamic PoW difficulty (base: {})", BASE_DIFFICULTY);
     println!(
