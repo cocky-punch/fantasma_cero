@@ -1,0 +1,139 @@
+body {
+    margin: 0;
+    font-family: sans-serif;
+    background: #ffffff;
+    color: #000000;
+}
+
+.title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.status {
+    padding: 2px 6px; /* no border by default */
+}
+
+.title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+.subtitle {
+    font-size: 0.9em;
+    margin-left: 6px;
+}
+
+.footer {
+    border-top: 1px solid #000000;
+    margin-top: 16px;
+    padding: 8px 12px;
+    display: flex;
+    gap: 6px;
+}
+
+/* top bar */
+.topbar {
+    padding: 8px 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    font-family: sans-serif; /* plain system font */
+}
+
+/* nav */
+.nav {
+    display: flex;
+    gap: 16px;
+    border-bottom: 1px solid #000000; /* optional second separator */
+    padding-bottom: 4px;
+}
+
+.nav a {
+    text-decoration: none;
+    color: #000000;
+    padding: 2px 0;
+    font: inherit; /* no special font */
+}
+
+/* title row */
+.title-row {
+    display: flex;
+    align-items: baseline;
+    gap: 6px;
+}
+
+/* status */
+.status {
+    padding: 2px 6px;
+    align-self: flex-start;
+    /* background: #ffff00;  enable only when attention is needed */
+}
+
+/* main container — single column */
+.container {
+    padding: 12px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    min-height: calc(100vh - 140px); /* pushes footer down */
+}
+
+.panel {
+    padding: 12px 0; /* more vertical space */
+    border: none; /* no full borders */
+}
+
+.panel:first-of-type {
+    border-top: 1px solid #000000;
+}
+
+.panel h2 {
+    margin: 0 0 10px 0;
+    font-size: 24px;
+    font-weight: bold;
+    display: inline-block;
+    border-bottom: 1px solid #000000;
+    padding-bottom: 2px;
+    background-color: yellow;
+}
+
+.metric-row {
+    display: flex;
+    margin: 6px 0;
+}
+
+/* key / label */
+.metric-row span:first-child {
+    width: 140px; /* column start for all values */
+    flex-shrink: 0;
+}
+
+/* value */
+.metric-row span:last-child {
+    text-align: left;
+}
+
+.metric-value {
+    font-weight: bold;
+}
+
+.panel-body {
+    margin-top: 6px;
+}
+
+#overview {
+    border-top: none;
+}
+
+/* footer — stays at bottom even with little content */
+.footer {
+    border-top: 1px solid #000000;
+    margin-top: auto;
+    padding: 8px 12px;
+    display: flex;
+    gap: 6px;
+    font-family: sans-serif;
+}

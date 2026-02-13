@@ -11,7 +11,7 @@ const MAX_DIFFICULTY: u64 = 6; // ~30-60 seconds
 pub struct ServerConfig {
     pub port: Option<u16>,
     pub js_check_enabled: bool,
-    pub js_token_secret: String,
+    pub js_token_secret: String, //FIXME - make it <redacted>
     pub operation_mode: OperationMode,
 
     //these URL-s must not be checked
@@ -84,7 +84,7 @@ pub struct AdminConfig {
 impl std::fmt::Debug for AdminConfig {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("AdminConfig")
-            .field("user_name", &self.user_name)
+            .field("user_name", &"<redacted>")
             .field("password", &"<redacted>")
             .finish()
     }

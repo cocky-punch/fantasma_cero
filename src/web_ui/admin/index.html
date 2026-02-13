@@ -1,26 +1,52 @@
-<!doctype html>
-<html>
-    <head>
-        <meta charset="utf-8" />
-        <title>Fantasma0 Admin</title>
+{% extends "base.html" %} {% block title %}Index{% endblock title %} {% block content %}
+<div id="status" class="status"></div>
 
-        <!--FIXME:  from config-->
-        <base href="/fantasma0/admin/" />
+<section id="overview" class="panel">
+    <h2>Overview</h2>
 
-        <link rel="stylesheet" href="./style.css" />
-    </head>
-    <body>
-        <header>
-            <h1>Fantasma0 Admin</h1>
-            <div id="status"></div>
-        </header>
+    <div class="metric-row">
+        <span>Mode</span>
+        <span id="m_mode"></span>
+    </div>
 
-        <section id="overview"></section>
-        <section id="traffic"></section>
-        <section id="recent"></section>
-        <section id="suspicious"></section>
+    <div class="metric-row">
+        <span>Uptime</span>
+        <span id="m_uptime"></span>
+    </div>
 
-        <!--<script src="/admin/app.js"></script>-->
-        <script src="./app.js"></script>
-    </body>
-</html>
+    <div class="metric-row">
+        <span>RPS</span>
+        <span id="m_rps"></span>
+    </div>
+
+    <div class="metric-row">
+        <span>Blocked</span>
+        <span id="m_blocked"></span>
+    </div>
+
+    <div class="metric-row">
+        <span>Rate-limited</span>
+        <span id="m_rate_limited"></span>
+    </div>
+</section>
+
+<section id="traffic" class="panel">
+    <h2>Traffic</h2>
+    <div class="panel-body"></div>
+</section>
+
+<section id="pow" class="panel">
+    <h2>PoW</h2>
+    <div class="panel-body"></div>
+</section>
+
+<section id="recent" class="panel">
+    <h2>Recent activity</h2>
+    <div class="panel-body"></div>
+</section>
+
+<section id="suspicious" class="panel">
+    <h2>Suspicious IPs</h2>
+    <div class="panel-body"></div>
+</section>
+{% endblock content %}

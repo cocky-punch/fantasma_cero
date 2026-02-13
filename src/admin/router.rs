@@ -1,32 +1,35 @@
+use axum::{
+    Json, Router,
+    body::{Body, to_bytes},
+    extract::{Form, State},
+    http::{HeaderMap, HeaderValue, Request, StatusCode, header},
+    response::{Html, IntoResponse, Response},
+    routing::{get, post},
+};
+use serde::Serialize;
 use std::{
     sync::{Arc, RwLock},
     time::Instant,
 };
-
-use axum::{
-    Json, Router,
-    extract::State,
-    response::{Html, IntoResponse},
-    routing::{get, post},
-};
-use serde::Serialize;
+use tera::{Context, Tera};
+use tower_http::normalize_path::NormalizePathLayer;
+use tower_http::services::ServeDir;
 
 use super::api_types::{JsResp, MetricsResp, PowResp, StatusResp};
 use super::auth;
 use super::state::AdminState;
 use super::types::{ConfigSnapshot, RecentEvent, SuspiciousIp};
+use super::helpers;
 
 #[derive(Clone)]
 pub struct AdminCtx {
     pub admin: AdminState,
+    pub html_templates: Arc<Tera>,
     pub waf_metrics: Arc<crate::metrics::WafMetrics>,
     pub mode: String,
     pub version: String,
 }
 
-const ADMIN_INDEX: &str = include_str!("../web_ui/admin/index.html");
-const ADMIN_STYLE: &str = include_str!("../web_ui/admin/style.css");
-const ADMIN_APP_JS: &str = include_str!("../web_ui/admin/app.js");
 const ADMIN_URL_PREFIX: &str = "/admin";
 
 pub fn build_router(ctx: AdminCtx) -> Router {
@@ -43,9 +46,8 @@ pub fn build_router(ctx: AdminCtx) -> Router {
     let protected_inner = Router::new()
         // UI
         .route("/", get(ui_index))
-        // assets
-        .route("/style.css", get(ui_style))
-        .route("/app.js", get(ui_js))
+        .route("/index", get(ui_index))
+        .route("/config", get(ui_config))
         // APIs
         .route("/api/status", get(status))
         .route("/api/metrics", get(metrics))
@@ -55,11 +57,15 @@ pub fn build_router(ctx: AdminCtx) -> Router {
         .layer(axum::middleware::from_fn_with_state(
             ctx.clone(),
             auth::require_admin,
-        ));
+        ))
+        // assets
+        // FIXME - more appropriate location
+        .nest_service("/assets", ServeDir::new("./src/web_ui/admin/assets"));
 
     let admin_inner = Router::new().merge(public_inner).merge(protected_inner);
     Router::new()
         .nest(ADMIN_URL_PREFIX, admin_inner)
+        // .layer(NormalizePathLayer::trim_trailing_slash())
         .with_state(ctx)
 }
 
@@ -121,19 +127,43 @@ async fn suspicious(State(ctx): State<AdminCtx>) -> Json<Vec<SuspiciousIp>> {
     Json(g.suspicious.clone())
 }
 
+//TODO
 async fn config(State(ctx): State<AdminCtx>) -> Json<ConfigSnapshot> {
     let g = ctx.admin.inner.read().await;
     Json(g.config_snapshot.clone())
 }
 
-async fn ui_index() -> Html<&'static str> {
-    Html(ADMIN_INDEX)
+//TODO
+pub async fn ui_config(State(state): State<AdminCtx>) -> Html<String> {
+    let mut ctx = helpers::tera_new_custom_context();
+    ctx.insert("config_str", &format!("{:#?}", &*crate::config::CONFIG));
+    let rendered = state
+        .html_templates
+        .render("config.html", &ctx)
+        .unwrap_or_else(|e| format!("template error: {}", e));
+
+    Html(rendered)
 }
 
-async fn ui_js() -> impl IntoResponse {
-    ([("Content-Type", "application/javascript")], ADMIN_APP_JS)
+async fn ui_index(State(state): State<AdminCtx>) -> impl IntoResponse {
+    let mut tctx = helpers::tera_new_custom_context();
+    tctx.insert("mode", &state.mode);
+    tctx.insert("version", &state.version);
+
+    let html = state
+        .html_templates
+        .render("index.html", &tctx)
+        .expect("template render failed");
+
+    Html(html)
 }
 
-async fn ui_style() -> impl IntoResponse {
-    ([("Content-Type", "text/css")], ADMIN_STYLE)
+fn render_template(html_templates: &Tera, template_name: &str, context: &Context) -> Response {
+    match html_templates.render(template_name, context) {
+        Ok(html) => Html(html).into_response(),
+        Err(e) => {
+            eprintln!("Template error: {}", e);
+            (StatusCode::INTERNAL_SERVER_ERROR, "Template error").into_response()
+        }
+    }
 }

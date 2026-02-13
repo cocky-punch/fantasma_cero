@@ -7,6 +7,11 @@ function el(id, html) {
     document.getElementById(id).innerHTML = html;
 }
 
+function setText(id, value) {
+    const n = document.getElementById(id);
+    if (n) n.textContent = value ?? "?";
+}
+
 async function refresh() {
     const [status, metrics, recent, suspicious] = await Promise.all([
         //FIXME - hard-coded
@@ -17,17 +22,12 @@ async function refresh() {
         //
     ]);
 
-    el("status", `Mode: <b>${status.mode}</b> · Uptime: ${Math.floor(status.uptime_seconds / 3600)}h`);
+    el("m_mode", `${status.mode}`);
+    el("m_uptime", `${Math.floor(status.uptime_seconds / 3600)}h`);
 
-    el(
-        "overview",
-        `
-    <h2>Overview</h2>
-    RPS: ${metrics.rps}<br>
-    Blocked: ${metrics.blocked}<br>
-    Rate-limited: ${metrics.rate_limited}
-  `,
-    );
+    setText("m_rps", metrics.rps);
+    setText("m_blocked", metrics.blocked);
+    setText("m_rate_limited", metrics.rate_limited);
 
     el(
         "recent",

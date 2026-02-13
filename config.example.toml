@@ -4,11 +4,29 @@ js_check_enabled = true
 js_token_secret = "<some secret value>"
 # validation_only | proxy
 operation_mode = "validation_only"
+skip_paths = [
+  "/metrics",
+  "/health",
+  "/favicon.ico",
+  "/static/",
+  "/.well-known/",
+  "/fantasma0/admin/"
+]
+
+skip_extensions = [
+  ".css",
+  ".js",
+  ".png",
+  ".jpg",
+  ".svg",
+  ".ico"
+]
 
 [admin]
 user_name = "<change_me>"
 password = "<change_me>"
 cookie_validity_in_days = 3
+base_path_prefix = "/fantasma0/admin"
 
 [traps]
 enabled = true

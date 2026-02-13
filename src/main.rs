@@ -57,7 +57,7 @@ struct AppState {
     honeypots: Arc<RwLock<HashMap<String, u64>>>,
     concurrent_usage: Arc<RwLock<HashMap<String, Vec<ActiveSession>>>>,
     target_url: String,
-    templates: Tera,
+    html_templates: Tera,
 
     //URL-s and paths that get skipped from PoW, any checks
     skip_exact_urls: Vec<String>,
@@ -188,7 +188,7 @@ impl AppState {
             honeypots: Default::default(),
             concurrent_usage: Default::default(),
             target_url,
-            templates: tera,
+            html_templates: tera,
 
             //TODO - load the historical data from the Db
             waf_metrics: Default::default(),
@@ -918,8 +918,8 @@ fn extract_cookie_value(headers: &HeaderMap, cookie_name: &str) -> Option<String
         })
 }
 
-fn render_template(templates: &Tera, template_name: &str, context: &Context) -> Response {
-    match templates.render(template_name, context) {
+fn render_template(html_templates: &Tera, template_name: &str, context: &Context) -> Response {
+    match html_templates.render(template_name, context) {
         Ok(html) => Html(html).into_response(),
         Err(e) => {
             eprintln!("Template error: {}", e);
@@ -1078,7 +1078,7 @@ async fn honeypot_route(State(state): State<AppState>, headers: HeaderMap) -> im
 
     let mut context = Context::new();
     context.insert("message", "Page Not Found");
-    render_template(&state.templates, "404.html", &context)
+    render_template(&state.html_templates, "404.html", &context)
 }
 
 // async fn health_check() -> impl IntoResponse {
@@ -1408,17 +1408,17 @@ async fn handle_proxy_mode(
         ValidationDecision::Blocked(msg) => {
             let mut ctx = Context::new();
             ctx.insert("message", msg);
-            render_template(&state.templates, "blocked.html", &ctx)
+            render_template(&state.html_templates, "blocked.html", &ctx)
         }
         ValidationDecision::Suspicious(score) => {
             let mut ctx = Context::new();
             ctx.insert("suspicion_score", &score);
-            render_template(&state.templates, "suspicious.html", &ctx)
+            render_template(&state.html_templates, "suspicious.html", &ctx)
         }
         ValidationDecision::RateLimited => {
             let mut ctx = Context::new();
             ctx.insert("message", "Too many requests. Please try again later.");
-            render_template(&state.templates, "rate_limited.html", &ctx)
+            render_template(&state.html_templates, "rate_limited.html", &ctx)
         }
     }
 }
@@ -1442,7 +1442,7 @@ fn render_challenge(state: &AppState, headers: &HeaderMap) -> Response<Body> {
     context.insert("expected_time", "10-60 seconds");
     context.insert("algorithm", &config::CONFIG.pow_challenge.algorithm);
 
-    render_template(&state.templates, "pow_challenge.html", &context)
+    render_template(&state.html_templates, "pow_challenge.html", &context)
 }
 
 async fn js_challenge_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -1457,7 +1457,7 @@ async fn js_challenge_handler(State(state): State<AppState>, headers: HeaderMap)
     let mut ctx = Context::new();
     ctx.insert("js_token", &token);
 
-    render_template(&state.templates, "js_challenge.html", &ctx)
+    render_template(&state.html_templates, "js_challenge.html", &ctx)
 }
 
 async fn verify_js(
@@ -1620,13 +1620,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let admin_ctx = admin::router::AdminCtx {
         admin: admin_state,
+        html_templates: admin::helpers::init_tera_html_templates(),
         waf_metrics: waf_metrics,
         mode: format!("{:?}", config::CONFIG.server.operation_mode),
         version: env!("CARGO_PKG_VERSION").into(),
     };
 
     //
-    //TODO - run the admin bg task
+    //TODO - run the admin bg task: "clean-up old session"
     // let admin_state_clone = admin_state.clone();
     // tokio::spawn(async move {
     //     let mut interval = tokio::time::interval(Duration::from_secs(300));

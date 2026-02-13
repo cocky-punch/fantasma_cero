@@ -2,6 +2,8 @@
 
 A web firewall (WAF) that both scares away and lures those pesky LLM/AI scraper bots. It hits an incoming HTTP request with a quick check — "Are you human, or just another bloody AI scraper in a trench coat?"— before letting it in.
 
+![challenge page](https://fantasma0.turbamentum.one/assets/img1a.png)
+
 
 ## Usage
 
@@ -43,6 +45,10 @@ Edit the one you need accordingly: port, host, etc; copy it into or merge with y
    ```bash
    ./fantasma_cero
    ```
+
+By default, the admin dashboard is at: http(s)://{host}:8081/fantasma0/admin
+
+
 
 ### TODO
 - [x] option "JS must be enabled/supported"
