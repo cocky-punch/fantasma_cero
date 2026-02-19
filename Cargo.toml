@@ -1,13 +1,13 @@
 [package]
 name = "fantasma_cero"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [features]
 default = ["proxy-mode"]
 proxy-mode = ["reqwest"]
 validation-only = []
-persist-sqlite = ["sqlx"]
+# persist-sqlite = ["sqlx"]
 
 [dependencies]
 axum = "0.8.4"
@@ -33,7 +33,7 @@ sha2 = "0.10.9"
 argon2 = { version = "0.5", features = ["std"] }
 dotenvy = "0.15.7"
 subtle = "2.6.1"
+sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"] }
 
 # optional
 reqwest = { version = "0.12", features = ["stream"], optional = true }
-sqlx = { version = "0.8", features = ["runtime-tokio", "sqlite"], optional = true }

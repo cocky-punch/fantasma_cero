@@ -56,21 +56,13 @@ pub struct TargetConfig {
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationMode {
-    Proxy,          // WAF proxies
-    ValidationOnly, // Only validate, web server proxies
-}
-
-#[derive(Debug, Clone, Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum PersistenceConfigBackend {
-    Memory,
-    Sqlite,
+    ValidationWithProxy,    // WAF proxies
+    Validation,             // Only validate, web server proxies
 }
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct PersistenceConfig {
-    backend: PersistenceConfigBackend,
-    sqlite_path: String,
+    pub sqlite_path: String,
 }
 
 #[derive(Clone, Deserialize)]

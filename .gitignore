@@ -23,3 +23,5 @@ target
 /notes
 __*
 config.toml
+*.sqlite
+*.db

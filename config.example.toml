@@ -2,8 +2,9 @@
 port = 8080
 js_check_enabled = true
 js_token_secret = "<some secret value>"
-# validation_only | proxy
-operation_mode = "validation_only"
+# validation | validation_with_proxy
+operation_mode = "validation"
+
 skip_paths = [
   "/metrics",
   "/health",

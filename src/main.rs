@@ -6,18 +6,21 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use reqwest;
-use serde::{Deserialize, Serialize};
-use serde_json::Value;
-use sha2::{Digest, Sha256};
 use std::{
     collections::HashMap,
     net::IpAddr,
     sync::{Arc, RwLock},
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
+
+use sqlx::SqlitePool;
+
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
+use reqwest;
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
+use sha2::{Digest, Sha256};
+
 use tera::{Context, Tera};
 use tokio::net::TcpListener;
 use tower::ServiceBuilder;
@@ -50,7 +53,7 @@ const ADMIN_BACKEND_URL_PREFIX: &'static str = "/fantasma0";
 
 #[derive(Clone)]
 struct AppState {
-    challenges: Arc<RwLock<HashMap<String, Challenge>>>,
+    challenges: Arc<RwLock<HashMap<String, PowChallenge>>>,
     verified_tokens: Arc<RwLock<HashMap<String, VerifiedClient>>>,
     ip_tracking: Arc<RwLock<HashMap<IpAddr, IpBehavior>>>,
     rate_limits: Arc<RwLock<HashMap<IpAddr, RateLimit>>>,
@@ -65,13 +68,11 @@ struct AppState {
     skip_extention_urls: Vec<String>,
     //
     waf_metrics: Arc<metrics::WafMetrics>,
-
-    #[cfg(feature = "persist-sqlite")]
-    token_store: Option<Arc<crate::persistence::TokenDbStore>>,
 }
 
 #[derive(Clone, Debug)]
-struct Challenge {
+struct PowChallenge {
+    attempt_id: Uuid,
     nonce: String,
     difficulty: u32,
     timestamp: u64,
@@ -81,7 +82,7 @@ struct Challenge {
 #[derive(Clone, Debug)]
 struct VerifiedClient {
     token: String,
-    ip: IpAddr,
+    ip_addr: IpAddr,
     user_agent: String,
     tls_fingerprint: String,
     browser_fingerprint: String,
@@ -113,7 +114,7 @@ struct RateLimit {
 
 #[derive(Clone, Debug)]
 struct ActiveSession {
-    ip: IpAddr,
+    ip_addr: IpAddr,
     user_agent: String,
     tls_fingerprint: String,
     last_request: u64,
@@ -140,22 +141,6 @@ impl AppState {
         let mut tera = Tera::new("html_templates/**/*")?;
         tera.autoescape_on(vec!["html"]);
 
-        #[cfg(feature = "persist-sqlite")]
-        let token_store = if config.persistence.backend == config::PersistenceConfigBackend::Sqlite
-        {
-            let store =
-                crate::persistence::TokenDbStore::new(&config.persistence.sqlite_path).await?;
-            println!(
-                "📦 [PERSISTENCE] Using SQLite: {}",
-                config.persistence.sqlite_path
-            );
-            Some(Arc::new(store))
-        } else {
-            println!("💾 [PERSISTENCE] Using in-memory storage (no persistence)");
-            None
-        };
-
-        //---
         // URLs to skip
         let mut skip_exact_urls = Vec::new();
         let mut skip_prefix_urls = Vec::new();
@@ -197,8 +182,7 @@ impl AppState {
             skip_prefix_urls,
             skip_extention_urls,
 
-            #[cfg(feature = "persist-sqlite")]
-            token_store,
+            // token_store,
         })
     }
 
@@ -292,19 +276,22 @@ impl AppState {
         }
     }
 
-    fn generate_challenge(&self, client_ip: IpAddr, user_agent: &str) -> Challenge {
+    fn generate_challenge(&self, client_ip: IpAddr, user_agent: &str) -> PowChallenge {
         let timestamp = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_secs();
 
         let difficulty = self.calculate_dynamic_difficulty(client_ip);
+        // let attempt_id = Uuid::new_v4().to_string();
+        let attempt_id = Uuid::new_v4();
 
         //TODO: too long for Argon2; must not exceed 64 chars
         // let nonce = format!("{}-{}-{}", client_ip, timestamp, Uuid::new_v4());
         let nonce = Uuid::new_v4().to_string();
 
-        let challenge = Challenge {
+        let challenge = PowChallenge {
+            attempt_id: attempt_id,
             nonce: nonce.clone(),
             difficulty,
             timestamp,
@@ -450,7 +437,7 @@ impl AppState {
     fn is_verified_by_cookie(
         &self,
         cookie_value: &str,
-        ip: IpAddr,
+        ip_addr: IpAddr,
         user_agent: &str,
         tls_fp: &str,
         browser_fp: &str,
@@ -467,7 +454,7 @@ impl AppState {
         eprintln!(
             "[COOKIE_VERIFY] Token: {}... | IP: {} | UA: {}",
             token_preview,
-            ip,
+            ip_addr,
             &user_agent[..std::cmp::min(50, user_agent.len())]
         );
 
@@ -509,20 +496,20 @@ impl AppState {
             );
 
             // IP check
-            if client.ip != ip {
+            if client.ip_addr != ip_addr {
                 client.ip_changes += 1;
                 eprintln!(
                     "[IP_CHANGE] {} -> {} | Total changes: {}",
-                    client.ip, ip, client.ip_changes
+                    client.ip_addr, ip_addr, client.ip_changes
                 );
 
                 if client.ip_changes > 3 {
                     suspicion_added += 30;
                     eprintln!("⚠️  [IP_CHANGE] Exceeded threshold! +30 suspicion");
                 }
-                client.ip = ip;
+                client.ip_addr = ip_addr;
             } else {
-                eprintln!("✓ [IP_CHECK] IP unchanged: {}", ip);
+                eprintln!("✓ [IP_CHECK] IP unchanged: {}", ip_addr);
             }
 
             // User agent check
@@ -589,7 +576,7 @@ impl AppState {
             // Concurrent usage check
             eprintln!("[CONCURRENT] Checking concurrent sessions...");
             let concurrent_suspicion =
-                self.check_concurrent_usage(cookie_value, ip, user_agent, tls_fp);
+                self.check_concurrent_usage(cookie_value, ip_addr, user_agent, tls_fp);
 
             if concurrent_suspicion > 0 {
                 eprintln!(
@@ -612,17 +599,16 @@ impl AppState {
             );
 
             // Persist updated state to SQLite
-            #[cfg(feature = "persist-sqlite")]
-            if let Some(store) = &self.token_store {
-                let store = store.clone();
-                let token = cookie_value.to_string();
-                let client_copy = client.clone();
-                tokio::spawn(async move {
-                    if let Err(e) = store.save_token(&token, &client_copy).await {
-                        eprintln!("❌ [PERSIST] Failed to update token: {}", e);
-                    }
-                });
-            }
+            // if let Some(store) = &self.token_store {
+            //     let store = store.clone();
+            //     let token = cookie_value.to_string();
+            //     let client_copy = client.clone();
+            //     tokio::spawn(async move {
+            //         if let Err(e) = store.save_token(&token, &client_copy).await {
+            //             eprintln!("❌ [PERSIST] Failed to update token: {}", e);
+            //         }
+            //     });
+            // }
 
             //FIXME: replace with const
             if client.suspicious_score > 80 {
@@ -647,7 +633,7 @@ impl AppState {
     fn check_concurrent_usage(
         &self,
         token: &str,
-        ip: IpAddr,
+        ip_addr: IpAddr,
         user_agent: &str,
         tls_fp: &str,
     ) -> u32 {
@@ -662,7 +648,7 @@ impl AppState {
 
         let mut found_session = false;
         for session in sessions.iter_mut() {
-            if session.ip == ip
+            if session.ip_addr == ip_addr
                 && session.user_agent == user_agent
                 && session.tls_fingerprint == tls_fp
             {
@@ -675,7 +661,7 @@ impl AppState {
 
         if !found_session {
             sessions.push(ActiveSession {
-                ip,
+                ip_addr,
                 user_agent: user_agent.to_string(),
                 tls_fingerprint: tls_fp.to_string(),
                 last_request: now,
@@ -694,7 +680,7 @@ impl AppState {
 
     fn create_verified_token(
         &self,
-        ip: IpAddr,
+        ip_addr: IpAddr,
         user_agent: &str,
         tls_fp: &str,
         browser_fp: &str,
@@ -707,7 +693,7 @@ impl AppState {
 
         let client = VerifiedClient {
             token: token.clone(),
-            ip,
+            ip_addr,
             user_agent: user_agent.to_string(),
             tls_fingerprint: tls_fp.to_string(),
             browser_fingerprint: browser_fp.to_string(),
@@ -726,18 +712,17 @@ impl AppState {
             .unwrap()
             .insert(token.clone(), client.clone());
 
-        // Store in SQLite if enabled
-        #[cfg(feature = "persist-sqlite")]
-        if let Some(store) = &self.token_store {
-            let store = store.clone();
-            let token_copy = token.clone();
-            let client_copy = client.clone();
-            tokio::spawn(async move {
-                if let Err(e) = store.save_token(&token_copy, &client_copy).await {
-                    eprintln!("❌ [PERSIST] Failed to save token: {}", e);
-                }
-            });
-        }
+        // Store in Db
+        // if let Some(store) = &self.token_store {
+        //     let store = store.clone();
+        //     let token_copy = token.clone();
+        //     let client_copy = client.clone();
+        //     tokio::spawn(async move {
+        //         if let Err(e) = store.save_token(&token_copy, &client_copy).await {
+        //             eprintln!("❌ [PERSIST] Failed to save token: {}", e);
+        //         }
+        //     });
+        // }
 
         token
     }
@@ -1262,7 +1247,7 @@ fn env_port() -> Option<u16> {
     std::env::var("PORT").ok()?.parse().ok()
 }
 
-fn build_validation_only_router(state: AppState) -> Router {
+fn build_validation_router(state: AppState) -> Router {
     Router::new()
         .route("/validate", get(validate_handler))
         //challenges
@@ -1275,7 +1260,7 @@ fn build_validation_only_router(state: AppState) -> Router {
         .with_state(state)
 }
 
-fn build_proxy_router(state: AppState) -> Router {
+fn build_validation_with_proxy_router(state: AppState) -> Router {
     Router::new()
         // verifications
         .route("/verify_js", post(verify_js))
@@ -1301,17 +1286,9 @@ enum ValidationDecision {
 
 fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> ValidationDecision {
     let path = req.uri().path();
-
-    //TODO - merge with "_skipped(...)"
-    // remove
-    // if path.starts_with(ADMIN_BACKEND_URL_PREFIX) {
-    //     return ValidationDecision::Allow;
-    // }
-
     if state.is_url_path_skipped(path) {
         return ValidationDecision::Allow;
     }
-    //
 
     let headers = req.headers();
     let client_ip = get_client_ip(headers);
@@ -1586,6 +1563,57 @@ pub fn issue_js_cookie(secret: &[u8], client_ip: &str, user_agent: &str) -> Stri
     )
 }
 
+pub async fn submit_feedback_report(
+    State(pool): State<SqlitePool>,
+    headers: HeaderMap,
+
+
+    // Json(req): Json<FeedbackReq>,
+    Json(req): Json<crate::admin::api_types::FeedbackReportReq>,
+
+) -> StatusCode {
+    let msg = req.message.trim();
+    if msg.is_empty() || msg.len() > 2048 {
+        return StatusCode::BAD_REQUEST;
+    }
+
+    let ua = headers
+        .get("user-agent")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let ip_addr = headers
+        .get("x-forwarded-for")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("")
+        .to_string();
+
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+
+    let _ = sqlx::query!(
+        r#"
+        INSERT INTO feedback_reports
+        (attempt_id, category, message, contact_details, ip_addr, user_agent, inserted_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+        "#,
+        req.attempt_id,
+        req.category,
+        msg,
+        req.contact,
+        ip_addr,
+        ua,
+        now,
+    )
+    .execute(&pool)
+    .await;
+
+    StatusCode::OK
+}
+
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
@@ -1600,15 +1628,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let waf_metrics = app_state.waf_metrics.clone();
     let (waf_routes, listen_interface) = match config::CONFIG.server.operation_mode {
-        config::OperationMode::Proxy => (build_proxy_router(app_state), "0.0.0.0"),
-        config::OperationMode::ValidationOnly => {
-            (build_validation_only_router(app_state), "127.0.0.1")
+        config::OperationMode::ValidationWithProxy => (build_validation_with_proxy_router(app_state), "0.0.0.0"),
+        config::OperationMode::Validation => {
+            (build_validation_router(app_state), "127.0.0.1")
         }
     };
 
     let additional_routes = Router::new()
         .route("/health", get(health::health))
-        .route("/metrics", get(metrics::metrics));
+        .route("/metrics", get(metrics::metrics))
+        .route("/feedback_report", post(submit_feedback_report));
 
     // FIXME
     let admin_state = admin::state::AdminState::new(admin::types::ConfigSnapshot {
@@ -1642,7 +1671,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .merge(waf_routes)
         .nest(ADMIN_BACKEND_URL_PREFIX, admin_router)
-        .nest(ADMIN_BACKEND_URL_PREFIX, additional_routes);
+        // .nest(ADMIN_BACKEND_URL_PREFIX, additional_routes)
+        ;
 
     let port = cli_port()
         .or_else(env_port)
