@@ -2,7 +2,7 @@ use super::router;
 use crate::config::CONFIG;
 use axum::{
     body::{Body, to_bytes},
-    extract::Form,
+    extract::{Form, State},
     http::{Request, StatusCode, header},
     middleware::Next,
     response::{Html, IntoResponse, Redirect},
@@ -80,7 +80,7 @@ pub async fn sign_in_post(
 }
 
 pub async fn require_admin(
-    axum::extract::State(ctx): axum::extract::State<router::AdminCtx>,
+    State(ctx): State<router::AdminCtx>,
     jar: CookieJar,
     req: Request<Body>,
     next: Next,

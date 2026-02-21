@@ -1,3 +1,9 @@
+use std::{
+    collections::HashMap,
+    net::IpAddr,
+    sync::{Arc, RwLock},
+};
+
 use axum::{
     Json, Router,
     body::{Body, to_bytes},
@@ -6,16 +12,7 @@ use axum::{
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
-use std::{
-    collections::HashMap,
-    net::IpAddr,
-    sync::{Arc, RwLock},
-    time::{Duration, SystemTime, UNIX_EPOCH},
-};
 
-use sqlx::SqlitePool;
-
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use reqwest;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -33,6 +30,10 @@ mod config;
 mod health;
 mod helpers;
 mod metrics;
+mod security;
+
+use crate::security::js_token::JsToken;
+use crate::security::pow_token::PowToken;
 
 const COOKIE_NAME: &str = "fantasma0_verified";
 const JS_ENABLED_COOKIE_NAME: &str = "fantasma0_js_ok";
@@ -52,9 +53,8 @@ const APPLICATION_NAME: &'static str = "fantasma0";
 const ADMIN_BACKEND_URL_PREFIX: &'static str = "/fantasma0";
 
 #[derive(Clone)]
-struct AppState {
+pub struct AppState {
     challenges: Arc<RwLock<HashMap<String, PowChallenge>>>,
-    verified_tokens: Arc<RwLock<HashMap<String, VerifiedClient>>>,
     ip_tracking: Arc<RwLock<HashMap<IpAddr, IpBehavior>>>,
     rate_limits: Arc<RwLock<HashMap<IpAddr, RateLimit>>>,
     honeypots: Arc<RwLock<HashMap<String, u64>>>,
@@ -62,12 +62,13 @@ struct AppState {
     target_url: String,
     html_templates: Tera,
 
-    //URL-s and paths that get skipped from PoW, any checks
+    //URL-s and paths that get skipped by PoW, any checks
     skip_exact_urls: Vec<String>,
     skip_prefix_urls: Vec<String>,
     skip_extention_urls: Vec<String>,
     //
     waf_metrics: Arc<metrics::WafMetrics>,
+    db_pool: sqlx::SqlitePool,
 }
 
 #[derive(Clone, Debug)]
@@ -77,22 +78,6 @@ struct PowChallenge {
     difficulty: u32,
     timestamp: u64,
     client_ip: IpAddr,
-}
-
-#[derive(Clone, Debug)]
-struct VerifiedClient {
-    token: String,
-    ip_addr: IpAddr,
-    user_agent: String,
-    tls_fingerprint: String,
-    browser_fingerprint: String,
-    created_at: u64,
-    last_seen: u64,
-    request_count: u32,
-    suspicious_score: u32,
-    ip_changes: u32,
-    user_agent_changes: u32,
-    concurrent_sessions: u32,
 }
 
 #[derive(Clone, Debug)]
@@ -137,7 +122,7 @@ pub struct JsVerifyRequest {
 }
 
 impl AppState {
-    fn new(target_url: String) -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(target_url: String, db_pool: sqlx::SqlitePool) -> Result<Self, Box<dyn std::error::Error>> {
         let mut tera = Tera::new("html_templates/**/*")?;
         tera.autoescape_on(vec!["html"]);
 
@@ -163,11 +148,9 @@ impl AppState {
 
             skip_extention_urls.push(e.to_ascii_lowercase());
         }
-        //---
 
         Ok(Self {
             challenges: Default::default(),
-            verified_tokens: Default::default(),
             ip_tracking: Default::default(),
             rate_limits: Default::default(),
             honeypots: Default::default(),
@@ -182,17 +165,13 @@ impl AppState {
             skip_prefix_urls,
             skip_extention_urls,
 
-            // token_store,
+            db_pool,
         })
     }
 
     fn check_rate_limit(&self, ip: IpAddr) -> bool {
         let mut rate_limits = self.rate_limits.write().unwrap();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
+        let now = helpers::current_ts();
         let rate_limit = rate_limits.entry(ip).or_insert(RateLimit {
             count: 0,
             window_start: now,
@@ -234,11 +213,7 @@ impl AppState {
 
     fn update_ip_behavior(&self, ip: IpAddr, user_agent: &str, suspicious_activity: bool) {
         let mut ip_tracking = self.ip_tracking.write().unwrap();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
+        let now = helpers::current_ts();
         let behavior = ip_tracking.entry(ip).or_insert(IpBehavior {
             first_seen: now,
             last_seen: now,
@@ -277,11 +252,7 @@ impl AppState {
     }
 
     fn generate_challenge(&self, client_ip: IpAddr, user_agent: &str) -> PowChallenge {
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
+        let timestamp = helpers::current_ts();
         let difficulty = self.calculate_dynamic_difficulty(client_ip);
         // let attempt_id = Uuid::new_v4().to_string();
         let attempt_id = Uuid::new_v4();
@@ -311,11 +282,7 @@ impl AppState {
         let mut challenges = self.challenges.write().unwrap();
 
         if let Some(challenge) = challenges.remove(nonce) {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-
+            let now = helpers::current_ts();
             if now - challenge.timestamp > 600 {
                 self.update_ip_behavior(challenge.client_ip, "", true);
                 return false;
@@ -354,11 +321,7 @@ impl AppState {
 
         let mut challenges = self.challenges.write().unwrap();
         if let Some(challenge) = challenges.remove(nonce) {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-
+            let now = helpers::current_ts();
             //FIXME: const
             if now - challenge.timestamp > 600 {
                 self.update_ip_behavior(challenge.client_ip, "", true);
@@ -434,202 +397,6 @@ impl AppState {
         }
     }
 
-    fn is_verified_by_cookie(
-        &self,
-        cookie_value: &str,
-        ip_addr: IpAddr,
-        user_agent: &str,
-        tls_fp: &str,
-        browser_fp: &str,
-    ) -> (bool, u32) {
-        let token_preview = &cookie_value[..std::cmp::min(8, cookie_value.len())];
-
-        // DEBUG
-        eprintln!(
-            "[DEBUG] is_verified_by_cookie #1; token_preview: {}; cookie_value: {}",
-            token_preview, cookie_value
-        );
-        //
-
-        eprintln!(
-            "[COOKIE_VERIFY] Token: {}... | IP: {} | UA: {}",
-            token_preview,
-            ip_addr,
-            &user_agent[..std::cmp::min(50, user_agent.len())]
-        );
-
-        let mut verified = self.verified_tokens.write().unwrap();
-
-        // DEBUG
-        eprintln!(
-            "[DEBUG] is_verified_by_cookie #2; verified: {:#?}",
-            verified
-        );
-        //
-
-        if let Some(client) = verified.get_mut(cookie_value) {
-            eprintln!("✅ [COOKIE_VERIFY] Token found in verified_tokens");
-
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap()
-                .as_secs();
-
-            let age_days = (now - client.created_at) / (24 * 3600);
-            eprintln!(
-                "[COOKIE_VERIFY] Token age: {} days (max: {})",
-                age_days,
-                config::CONFIG.pow_challenge.cookie_duration_days
-            );
-
-            if now - client.created_at
-                > config::CONFIG.pow_challenge.cookie_duration_days * 24 * 3600
-            {
-                eprintln!("❌ [COOKIE_VERIFY] Token expired");
-                return (false, 0);
-            }
-
-            let mut suspicion_added = 0;
-            eprintln!(
-                "[COOKIE_VERIFY] Starting suspicion check | Current score: {}",
-                client.suspicious_score
-            );
-
-            // IP check
-            if client.ip_addr != ip_addr {
-                client.ip_changes += 1;
-                eprintln!(
-                    "[IP_CHANGE] {} -> {} | Total changes: {}",
-                    client.ip_addr, ip_addr, client.ip_changes
-                );
-
-                if client.ip_changes > 3 {
-                    suspicion_added += 30;
-                    eprintln!("⚠️  [IP_CHANGE] Exceeded threshold! +30 suspicion");
-                }
-                client.ip_addr = ip_addr;
-            } else {
-                eprintln!("✓ [IP_CHECK] IP unchanged: {}", ip_addr);
-            }
-
-            // User agent check
-            if client.user_agent != user_agent {
-                client.user_agent_changes += 1;
-                eprintln!(
-                    "[USER_AGENT_CHANGE] Old: {} | New: {} | Total changes: {}",
-                    &client.user_agent[..std::cmp::min(40, client.user_agent.len())],
-                    &user_agent[..std::cmp::min(40, user_agent.len())],
-                    client.user_agent_changes
-                );
-
-                if client.user_agent_changes > 2 {
-                    suspicion_added += 40;
-                    eprintln!("⚠️ [USER_AGENT] Exceeded threshold! +40 suspicion");
-                }
-            } else {
-                eprintln!("✓ [USER_AGENT_CHECK] User-Agent unchanged");
-            }
-
-            // TLS fingerprint check
-            if !client.tls_fingerprint.is_empty() && client.tls_fingerprint != tls_fp {
-                suspicion_added += 50;
-                eprintln!(
-                    "[TLS_CHANGE] Old: {} | New: {} | +50 suspicion",
-                    &client.tls_fingerprint[..std::cmp::min(16, client.tls_fingerprint.len())],
-                    &tls_fp[..std::cmp::min(16, tls_fp.len())]
-                );
-            } else if !client.tls_fingerprint.is_empty() {
-                eprintln!("✓ [TLS_CHECK] TLS fingerprint unchanged");
-            } else {
-                eprintln!("ℹ️  [TLS_CHECK] No stored TLS fingerprint");
-            }
-
-            // Browser fingerprint - FUZZY COMPARISON
-            if !client.browser_fingerprint.is_empty() && !browser_fp.is_empty() {
-                eprintln!("[FP_CHECK] Comparing browser fingerprints...");
-                let fp_suspicion =
-                    compare_browser_fingerprints(&client.browser_fingerprint, browser_fp);
-
-                if fp_suspicion > 0 {
-                    eprintln!(
-                        "⚠️  [FP_CHANGE] Browser fingerprint differences detected: +{} suspicion",
-                        fp_suspicion
-                    );
-                    suspicion_added += fp_suspicion;
-                } else {
-                    eprintln!("✓ [FP_CHECK] Browser fingerprint matches");
-                }
-
-                //FIXME: replace with const
-                if fp_suspicion > 20 {
-                    eprintln!(
-                        "🚨 [FP_ALERT] Significant browser fingerprint change for token {}: +{} suspicion",
-                        token_preview, fp_suspicion
-                    );
-                }
-            } else if client.browser_fingerprint.is_empty() {
-                eprintln!("ℹ️  [FP_CHECK] No stored browser fingerprint");
-            } else if browser_fp.is_empty() {
-                eprintln!("ℹ️  [FP_CHECK] No current browser fingerprint provided");
-            }
-
-            // Concurrent usage check
-            eprintln!("[CONCURRENT] Checking concurrent sessions...");
-            let concurrent_suspicion =
-                self.check_concurrent_usage(cookie_value, ip_addr, user_agent, tls_fp);
-
-            if concurrent_suspicion > 0 {
-                eprintln!(
-                    "⚠️  [CONCURRENT] Multiple sessions detected: +{} suspicion",
-                    concurrent_suspicion
-                );
-            } else {
-                eprintln!("✓ [CONCURRENT] Single session detected");
-            }
-            suspicion_added += concurrent_suspicion;
-
-            // Update client state
-            client.suspicious_score += suspicion_added;
-            client.last_seen = now;
-            client.request_count += 1;
-
-            eprintln!(
-                "[SUMMARY] Added: {} | Total score: {} | Requests: {}",
-                suspicion_added, client.suspicious_score, client.request_count
-            );
-
-            // Persist updated state to SQLite
-            // if let Some(store) = &self.token_store {
-            //     let store = store.clone();
-            //     let token = cookie_value.to_string();
-            //     let client_copy = client.clone();
-            //     tokio::spawn(async move {
-            //         if let Err(e) = store.save_token(&token, &client_copy).await {
-            //             eprintln!("❌ [PERSIST] Failed to update token: {}", e);
-            //         }
-            //     });
-            // }
-
-            //FIXME: replace with const
-            if client.suspicious_score > 80 {
-                eprintln!(
-                    "🚫 [BLOCKED] Suspicion score {} exceeds threshold of 80",
-                    client.suspicious_score
-                );
-                return (false, client.suspicious_score);
-            }
-
-            eprintln!(
-                "✅ [ALLOWED] Cookie verified | Score: {} | Status: OK\n",
-                client.suspicious_score
-            );
-            (true, client.suspicious_score)
-        } else {
-            eprintln!("❌ [COOKIE_VERIFY] Token not found in verified_tokens\n");
-            (false, 0)
-        }
-    }
-
     fn check_concurrent_usage(
         &self,
         token: &str,
@@ -638,11 +405,7 @@ impl AppState {
         tls_fp: &str,
     ) -> u32 {
         let mut concurrent = self.concurrent_usage.write().unwrap();
-        let now = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
+        let now = helpers::current_ts();
         let sessions = concurrent.entry(token.to_string()).or_insert_with(Vec::new);
         sessions.retain(|s| now - s.last_request < 300);
 
@@ -678,55 +441,6 @@ impl AppState {
         }
     }
 
-    fn create_verified_token(
-        &self,
-        ip_addr: IpAddr,
-        user_agent: &str,
-        tls_fp: &str,
-        browser_fp: &str,
-    ) -> String {
-        let token = Uuid::new_v4().to_string();
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-
-        let client = VerifiedClient {
-            token: token.clone(),
-            ip_addr,
-            user_agent: user_agent.to_string(),
-            tls_fingerprint: tls_fp.to_string(),
-            browser_fingerprint: browser_fp.to_string(),
-            created_at: timestamp,
-            last_seen: timestamp,
-            request_count: 1,
-            suspicious_score: 0,
-            ip_changes: 0,
-            user_agent_changes: 0,
-            concurrent_sessions: 1,
-        };
-
-        // Store in memory
-        self.verified_tokens
-            .write()
-            .unwrap()
-            .insert(token.clone(), client.clone());
-
-        // Store in Db
-        // if let Some(store) = &self.token_store {
-        //     let store = store.clone();
-        //     let token_copy = token.clone();
-        //     let client_copy = client.clone();
-        //     tokio::spawn(async move {
-        //         if let Err(e) = store.save_token(&token_copy, &client_copy).await {
-        //             eprintln!("❌ [PERSIST] Failed to save token: {}", e);
-        //         }
-        //     });
-        // }
-
-        token
-    }
-
     fn is_ip_blocked(&self, ip: IpAddr) -> bool {
         let ip_tracking = self.ip_tracking.read().unwrap();
 
@@ -735,21 +449,6 @@ impl AppState {
         } else {
             false
         }
-    }
-
-    fn verify_js_cookie(&self, headers: &HeaderMap, ip: IpAddr, ua: &str) -> bool {
-        if !config::CONFIG.server.js_check_enabled {
-            return true;
-        }
-
-        let js_token_secret = config::CONFIG.server.js_token_secret.as_bytes();
-        let ip_str = ip.to_string();
-
-        let Some(cookie_value) = extract_cookie_value(headers, JS_ENABLED_COOKIE_NAME) else {
-            return false;
-        };
-        // FIXME: const
-        verify_js_token(js_token_secret, &cookie_value, &ip_str, ua, 120)
     }
 
     pub fn is_url_path_skipped(&self, path: &str) -> bool {
@@ -1021,28 +720,23 @@ async fn verify_pow(
     eprintln!("[DEBUG] [verify_pow] pow_res: {:?}", pow_res);
 
     if pow_res {
-        let browser_fp = params.browser_fingerprint.as_deref().unwrap_or("unknown");
-        let token =
-            state.create_verified_token(client_ip, &user_agent, &tls_fingerprint, browser_fp);
-
-        let cookie_value = format!(
-            "{}={}; Path=/; Max-Age={}; HttpOnly; Secure; SameSite=Strict",
+        let ttl_seconds = config::CONFIG.pow_challenge.cookie_duration_days * 24 * 3600;
+        let cookie = PowToken::issue_cookie(
+            config::CONFIG.server.pow_token_secret.as_bytes(),
+            &client_ip,
             COOKIE_NAME,
-            token,
-            config::CONFIG.pow_challenge.cookie_duration_days * 24 * 3600
+            ttl_seconds,
         );
 
-        //update the metrics
         state
             .waf_metrics
             .pow_passed
             .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
 
         let mut response = StatusCode::OK.into_response();
-        response.headers_mut().insert(
-            header::SET_COOKIE,
-            HeaderValue::from_str(&cookie_value).unwrap(),
-        );
+        response
+            .headers_mut()
+            .insert(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
 
         response
     } else {
@@ -1066,24 +760,17 @@ async fn honeypot_route(State(state): State<AppState>, headers: HeaderMap) -> im
     render_template(&state.html_templates, "404.html", &context)
 }
 
-// async fn health_check() -> impl IntoResponse {
-//     "Fantasma0 is running"
-// }
-
 async fn admin_stats(State(state): State<AppState>) -> impl IntoResponse {
     let ip_tracking = state.ip_tracking.read().unwrap();
-    let verified_tokens = state.verified_tokens.read().unwrap();
     let honeypots = state.honeypots.read().unwrap();
 
     let stats = format!(
         r#"{{
     "tracked_ips": {},
-    "verified_clients": {},
     "honeypot_hits": {},
     "total_suspicious_score": {}
 }}"#,
         ip_tracking.len(),
-        verified_tokens.len(),
         honeypots.len(),
         ip_tracking
             .values()
@@ -1104,43 +791,40 @@ async fn validate_handler(State(state): State<AppState>, headers: HeaderMap) -> 
     let tls_fingerprint = get_tls_fingerprint(&headers);
     eprintln!("🔍 [VALIDATE] Request from {}", client_ip);
 
-    //TODO remove this condition
     if config::CONFIG.server.js_check_enabled {
-        //
-        let js_ok = state.verify_js_cookie(&headers, client_ip, &user_agent);
-        if !js_ok {
-            let mut resp = StatusCode::UNAUTHORIZED.into_response();
-            let header_name = axum::http::HeaderName::from_bytes(
-                format!("x-{}-challenge", APPLICATION_NAME).as_bytes(),
-            )
-            .unwrap();
+        if let Some(cookie_value) = extract_cookie_value(&headers, JS_ENABLED_COOKIE_NAME) {
+            let js_token_secret = config::CONFIG.server.js_token_secret.as_bytes();
+            let js_ok = JsToken::verify(
+                &js_token_secret,
+                &cookie_value,
+                &client_ip,
+                &user_agent,
+                120,
+            );
+            if !js_ok {
+                let mut resp = StatusCode::UNAUTHORIZED.into_response();
+                let header_name = axum::http::HeaderName::from_bytes(
+                    format!("x-{}-challenge", APPLICATION_NAME).as_bytes(),
+                )
+                .unwrap();
 
-            resp.headers_mut()
-                .insert(header_name, HeaderValue::from_static("js"));
+                resp.headers_mut()
+                    .insert(header_name, HeaderValue::from_static("js"));
 
-            return resp;
+                return resp;
+            }
         }
     }
 
     if let Some(cookie_value) = extract_cookie_value(&headers, COOKIE_NAME) {
-        let (is_valid, suspicion_score) = state.is_verified_by_cookie(
+        // let is_valid = verification_token::validate_pow_token(
+        let is_valid = PowToken::verify(
+            config::CONFIG.server.pow_token_secret.as_bytes(),
             &cookie_value,
-            client_ip,
-            &user_agent,
-            &tls_fingerprint,
-            "",
+            &client_ip,
         );
 
-        // DEBUG
-        eprintln!(
-            "[DEBUG] validate_handler #1; cookie_value: {}; is_valid: {}; suspicion_score: {}",
-            cookie_value, is_valid, suspicion_score
-        );
-        //
-
-        if is_valid && suspicion_score <= SUSPICION_THRESHOLD {
-            eprintln!("✅ [VALIDATE] Valid cookie, score: {}", suspicion_score);
-
+        if is_valid {
             // Return 200 - Nginx allows request through
             let mut resp = StatusCode::OK.into_response();
             let header_name = axum::http::HeaderName::from_bytes(
@@ -1150,18 +834,15 @@ async fn validate_handler(State(state): State<AppState>, headers: HeaderMap) -> 
 
             resp.headers_mut().insert(
                 header_name,
-                HeaderValue::from_str(&suspicion_score.to_string()).unwrap(),
+                // FIXME
+                // HeaderValue::from_str(&suspicion_score.to_string()).unwrap(),
+                HeaderValue::from_str("ok").unwrap(),
             );
 
             return resp;
         } else {
-            eprintln!(
-                "⚠️ [VALIDATE] Invalid or suspicious: score {}",
-                suspicion_score
-            );
+            eprintln!("❌ [VALIDATE] No cookie found");
         }
-    } else {
-        eprintln!("❌ [VALIDATE] No cookie found");
     }
 
     // Return 401 - Nginx returns the PoW challenge page
@@ -1172,6 +853,7 @@ async fn validate_handler(State(state): State<AppState>, headers: HeaderMap) -> 
 
     resp.headers_mut()
         .insert(header_name, HeaderValue::from_static("pow"));
+
     resp
 }
 
@@ -1247,7 +929,7 @@ fn env_port() -> Option<u16> {
     std::env::var("PORT").ok()?.parse().ok()
 }
 
-fn build_validation_router(state: AppState) -> Router {
+fn build_validation_router() -> Router<AppState> {
     Router::new()
         .route("/validate", get(validate_handler))
         //challenges
@@ -1257,10 +939,10 @@ fn build_validation_router(state: AppState) -> Router {
         .route("/verify_js", post(verify_js))
         .route("/verify_pow", post(verify_pow))
         // others
-        .with_state(state)
+        // .with_state(state)
 }
 
-fn build_validation_with_proxy_router(state: AppState) -> Router {
+fn build_validation_with_proxy_router() -> Router<AppState> {
     Router::new()
         // verifications
         .route("/verify_js", post(verify_js))
@@ -1271,7 +953,7 @@ fn build_validation_with_proxy_router(state: AppState) -> Router {
         // .route("/wp-admin", get(honeypot_route))
         .route("/", axum::routing::any(main_handler))
         .route("/{*path}", axum::routing::any(main_handler))
-        .with_state(state)
+        // .with_state(state)
 }
 
 #[derive(Debug)]
@@ -1317,34 +999,35 @@ fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> Validati
             config::CONFIG.server.js_check_enabled
         );
         //
-        if !state.verify_js_cookie(headers, client_ip, &user_agent) {
-            // DEBUG
-            eprintln!("[DEBUG] [js_check_enabled] #3; inside verify_js_cookie == false");
-            //
 
+        let Some(cookie_value) = extract_cookie_value(&headers, JS_ENABLED_COOKIE_NAME) else {
+            return ValidationDecision::JsChallenge;
+        };
+
+        let js_token_secret = config::CONFIG.server.js_token_secret.as_bytes();
+        let js_ok = JsToken::verify(
+            &js_token_secret,
+            &cookie_value,
+            &client_ip,
+            &user_agent,
+            120,
+        );
+        if !js_ok {
             return ValidationDecision::JsChallenge;
         }
     }
 
     // ── PoW ──────────────────────────────
     if let Some(cookie_value) = extract_cookie_value(headers, COOKIE_NAME) {
-        let (is_valid, suspicion_score) = state.is_verified_by_cookie(
+        // let is_valid = verification_token::validate_pow_token(
+        let is_valid = PowToken::verify(
+            config::CONFIG.server.pow_token_secret.as_bytes(),
             &cookie_value,
-            client_ip,
-            &user_agent,
-            &tls_fingerprint,
-            &browser_fp,
+            &client_ip,
         );
 
         if is_valid {
-            if suspicion_score > SUSPICION_THRESHOLD {
-                return ValidationDecision::Suspicious(suspicion_score);
-            }
             return ValidationDecision::Allow;
-        }
-
-        if suspicion_score > 0 {
-            return ValidationDecision::Suspicious(suspicion_score);
         }
     }
 
@@ -1425,12 +1108,8 @@ fn render_challenge(state: &AppState, headers: &HeaderMap) -> Response<Body> {
 async fn js_challenge_handler(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let client_ip = get_client_ip(&headers);
     let ua = get_user_agent(&headers);
-
-    // ephemeral token
-    let client_ip_str = client_ip.to_string();
     let js_token_secret = config::CONFIG.server.js_token_secret.as_bytes();
-    let token = issue_js_token(js_token_secret, &client_ip_str, &ua);
-
+    let token = JsToken::issue(js_token_secret, &client_ip, &ua);
     let mut ctx = Context::new();
     ctx.insert("js_token", &token);
 
@@ -1442,183 +1121,37 @@ async fn verify_js(
     headers: HeaderMap,
     Json(req): Json<JsVerifyRequest>,
 ) -> Response {
-    let ip = get_client_ip(&headers);
+    let ip_addr = get_client_ip(&headers);
     let ua = get_user_agent(&headers);
-
-    let ip_str = ip.to_string();
     let js_token_secret = config::CONFIG.server.js_token_secret.as_bytes();
 
-    //FIXME:
-    // const
-    if !verify_js_token(js_token_secret, &req.token, &ip_str, &ua, 120) {
+    if !JsToken::verify(js_token_secret, &req.token, &ip_addr, &ua, 120) {
         return StatusCode::FORBIDDEN.into_response();
     }
 
-    // Only here do we set the cookie
-    let cookie = issue_js_cookie(js_token_secret, &ip_str, &ua);
-
+    let cookie = JsToken::issue_cookie(
+        js_token_secret,
+        &ip_addr,
+        &ua,
+        JS_ENABLED_COOKIE_NAME,
+        86400,
+    );
     let mut resp = StatusCode::NO_CONTENT.into_response();
     resp.headers_mut()
         .append(header::SET_COOKIE, HeaderValue::from_str(&cookie).unwrap());
+
     resp
 }
 
-pub fn verify_js_token(
-    secret: &[u8],
-    token: &str,
-    client_ip: &str,
-    user_agent: &str,
-    max_age_secs: u64,
-) -> bool {
-    use hmac::Mac;
 
-    let decoded = match URL_SAFE_NO_PAD.decode(token) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-
-    let s = match String::from_utf8(decoded) {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-
-    let parts: Vec<&str> = s.split('|').collect();
-    if parts.len() != 4 {
-        return false;
-    }
-
-    let ts: u64 = match parts[0].parse() {
-        Ok(v) => v,
-        Err(_) => return false,
-    };
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    if now.saturating_sub(ts) > max_age_secs {
-        return false;
-    }
-
-    let expected_ip = helpers::ip_prefix(client_ip);
-    let expected_ua = helpers::ua_hash(user_agent);
-
-    if parts[1] != expected_ip || parts[2] != expected_ua {
-        return false;
-    }
-
-    let payload = format!("{}|{}|{}", parts[0], parts[1], parts[2]);
-
-    let mut mac = HmacSha256::new_from_slice(secret).unwrap();
-    mac.update(payload.as_bytes());
-    let expected_sig = hex::encode(mac.finalize().into_bytes());
-
-    subtle::ConstantTimeEq::ct_eq(expected_sig.as_bytes(), parts[3].as_bytes()).into()
-}
-
-pub fn issue_js_token(secret: &[u8], client_ip: &str, user_agent: &str) -> String {
-    use hmac::Mac;
-
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let ip_pfx = helpers::ip_prefix(client_ip);
-    let ua_h = helpers::ua_hash(user_agent);
-
-    let payload = format!("{ts}|{ip_pfx}|{ua_h}");
-
-    let mut mac = HmacSha256::new_from_slice(secret).unwrap();
-    mac.update(payload.as_bytes());
-    let sig = hex::encode(mac.finalize().into_bytes());
-
-    let token = format!("{payload}|{sig}");
-    URL_SAFE_NO_PAD.encode(token)
-}
-
-pub fn issue_js_cookie(secret: &[u8], client_ip: &str, user_agent: &str) -> String {
-    use hmac::Mac;
-
-    let ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs();
-
-    let ip_pfx = helpers::ip_prefix(client_ip);
-    let ua_h = helpers::ua_hash(user_agent);
-
-    let payload = format!("{ts}|{ip_pfx}|{ua_h}");
-
-    let mut mac = HmacSha256::new_from_slice(secret).unwrap();
-    mac.update(payload.as_bytes());
-    let sig = hex::encode(mac.finalize().into_bytes());
-
-    let token = URL_SAFE_NO_PAD.encode(format!("{payload}|{sig}"));
-
-    format!(
-        "{}={}; Path=/; Max-Age=86400; HttpOnly; SameSite=Lax",
-        JS_ENABLED_COOKIE_NAME, token
-    )
-}
-
-pub async fn submit_feedback_report(
-    State(pool): State<SqlitePool>,
-    headers: HeaderMap,
-
-
-    // Json(req): Json<FeedbackReq>,
-    Json(req): Json<crate::admin::api_types::FeedbackReportReq>,
-
-) -> StatusCode {
-    let msg = req.message.trim();
-    if msg.is_empty() || msg.len() > 2048 {
-        return StatusCode::BAD_REQUEST;
-    }
-
-    let ua = headers
-        .get("user-agent")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-
-    let ip_addr = headers
-        .get("x-forwarded-for")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or("")
-        .to_string();
-
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap()
-        .as_secs() as i64;
-
-    let _ = sqlx::query!(
-        r#"
-        INSERT INTO feedback_reports
-        (attempt_id, category, message, contact_details, ip_addr, user_agent, inserted_at)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
-        "#,
-        req.attempt_id,
-        req.category,
-        msg,
-        req.contact,
-        ip_addr,
-        ua,
-        now,
-    )
-    .execute(&pool)
-    .await;
-
-    StatusCode::OK
-}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     tracing_subscriber::fmt::init();
+
     let _ = dotenvy::dotenv();
-    let app_state = match AppState::new(config::CONFIG.target.origin_url.clone()) {
+    let db_pool = helpers::init_db().await;
+    let app_state = match AppState::new(config::CONFIG.target.origin_url.clone(), db_pool) {
         Ok(x) => x,
         Err(e) => {
             eprintln!("Failed to initialize templates: {}", e);
@@ -1628,16 +1161,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let waf_metrics = app_state.waf_metrics.clone();
     let (waf_routes, listen_interface) = match config::CONFIG.server.operation_mode {
-        config::OperationMode::ValidationWithProxy => (build_validation_with_proxy_router(app_state), "0.0.0.0"),
-        config::OperationMode::Validation => {
-            (build_validation_router(app_state), "127.0.0.1")
+        config::OperationMode::ValidationWithProxy => {
+            (build_validation_with_proxy_router(), "0.0.0.0")
         }
+        config::OperationMode::Validation => (build_validation_router(), "127.0.0.1"),
     };
 
     let additional_routes = Router::new()
         .route("/health", get(health::health))
         .route("/metrics", get(metrics::metrics))
-        .route("/feedback_report", post(submit_feedback_report));
+        // .route("/feedback_report", post(submit_feedback_report))
+    ;
 
     // FIXME
     let admin_state = admin::state::AdminState::new(admin::types::ConfigSnapshot {
@@ -1670,9 +1204,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let admin_router = admin::router::build_router(admin_ctx);
     let app = Router::new()
         .merge(waf_routes)
+        .with_state(app_state)
+
         .nest(ADMIN_BACKEND_URL_PREFIX, admin_router)
-        // .nest(ADMIN_BACKEND_URL_PREFIX, additional_routes)
-        ;
+        .nest(ADMIN_BACKEND_URL_PREFIX, additional_routes)
+    ;
+
 
     let port = cli_port()
         .or_else(env_port)

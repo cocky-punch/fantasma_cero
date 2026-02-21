@@ -30,11 +30,3 @@ pub struct JsResp {
     pub hits: u64,
     pub fail_pct: u32,
 }
-
-#[derive(Deserialize)]
-pub struct FeedbackReportReq {
-    pub attempt_id: Option<String>,
-    pub category: Option<String>,
-    pub message: String,
-    pub contact: Option<String>,
-}

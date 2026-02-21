@@ -11,7 +11,8 @@ const MAX_DIFFICULTY: u64 = 6; // ~30-60 seconds
 pub struct ServerConfig {
     pub port: Option<u16>,
     pub js_check_enabled: bool,
-    pub js_token_secret: String, //FIXME - make it <redacted>
+    pub pow_token_secret: String, //FIXME - make it <redacted>; move to [pow_challenge]
+    pub js_token_secret: String,  //FIXME - make it <redacted>
     pub operation_mode: OperationMode,
 
     //these URL-s must not be checked
@@ -56,8 +57,8 @@ pub struct TargetConfig {
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(rename_all = "snake_case")]
 pub enum OperationMode {
-    ValidationWithProxy,    // WAF proxies
-    Validation,             // Only validate, web server proxies
+    ValidationWithProxy, // WAF validates and proxies
+    Validation,          // WAF validates, web server proxies
 }
 
 #[derive(Debug, Deserialize, Clone)]

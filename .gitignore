@@ -25,3 +25,4 @@ __*
 config.toml
 *.sqlite
 *.db
+*.sqlite-*

@@ -1,4 +1,4 @@
-use serde::Serialize;
+use serde::{Serialize, Deserialize};
 use std::net::IpAddr;
 
 #[derive(Serialize, Clone)]
@@ -22,4 +22,12 @@ pub struct ConfigSnapshot {
     pub pow_difficulty: u32,
     pub cookie_ttl_sec: u64,
     pub rate_limit_rps: u32,
+}
+
+#[derive(Deserialize)]
+pub struct FeedbackReportReq {
+    pub attempt_id: Option<String>,
+    pub category: Option<String>,
+    pub message: String,
+    pub contact: Option<String>,
 }

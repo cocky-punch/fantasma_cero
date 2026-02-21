@@ -4,6 +4,9 @@ use axum::http::Request;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use std::net::IpAddr;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use crate::config;
 
 pub fn get_client_ip(req: &Request<Body>) -> Option<IpAddr> {
     // Try X-Forwarded-For header (may contain multiple IPs)
@@ -250,25 +253,20 @@ fn get_tls_fingerprint(headers: &HeaderMap) -> String {
     hex::encode(hash)[..16].to_string()
 }
 
-pub fn ua_hash(ua: &str) -> String {
-    let mut h = Sha256::new();
-    h.update(ua.as_bytes());
-    hex::encode(h.finalize())
+pub fn current_ts() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
 }
 
-pub fn ip_prefix(ip: &str) -> String {
-    if let Ok(addr) = ip.parse::<std::net::IpAddr>() {
-        match addr {
-            std::net::IpAddr::V4(v4) => {
-                let o = v4.octets();
-                format!("{}.{}.{}.0/24", o[0], o[1], o[2])
-            }
-            std::net::IpAddr::V6(v6) => {
-                let seg = v6.segments();
-                format!("{:x}:{:x}:{:x}:{:x}::/64", seg[0], seg[1], seg[2], seg[3])
-            }
-        }
-    } else {
-        "invalid".into()
-    }
+pub async fn init_db() -> sqlx::SqlitePool {
+    let db_conn_str = format!("sqlite:{}", config::CONFIG.persistence.sqlite_path);
+    let pool = sqlx::SqlitePool::connect(&db_conn_str).await.unwrap();
+
+    sqlx::query("PRAGMA journal_mode=WAL;").execute(&pool).await.unwrap();
+    sqlx::query("PRAGMA synchronous=NORMAL;").execute(&pool).await.unwrap();
+    sqlx::query("PRAGMA temp_store=MEMORY;").execute(&pool).await.unwrap();
+
+    pool
 }
