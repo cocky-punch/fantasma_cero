@@ -264,9 +264,18 @@ pub async fn init_db() -> sqlx::SqlitePool {
     let db_conn_str = format!("sqlite:{}", config::CONFIG.persistence.sqlite_path);
     let pool = sqlx::SqlitePool::connect(&db_conn_str).await.unwrap();
 
-    sqlx::query("PRAGMA journal_mode=WAL;").execute(&pool).await.unwrap();
-    sqlx::query("PRAGMA synchronous=NORMAL;").execute(&pool).await.unwrap();
-    sqlx::query("PRAGMA temp_store=MEMORY;").execute(&pool).await.unwrap();
+    sqlx::query("PRAGMA journal_mode=WAL;")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("PRAGMA synchronous=NORMAL;")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("PRAGMA temp_store=MEMORY;")
+        .execute(&pool)
+        .await
+        .unwrap();
 
     pool
 }

@@ -1,8 +1,7 @@
-use axum::{Json, http::StatusCode, response::IntoResponse};
-use axum::extract::State;
-use serde::Serialize;
 use crate::AppState;
-
+use axum::extract::State;
+use axum::{Json, http::StatusCode, response::IntoResponse};
+use serde::Serialize;
 
 #[derive(Serialize)]
 struct Health {

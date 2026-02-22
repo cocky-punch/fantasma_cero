@@ -11,7 +11,7 @@ use axum_extra::extract::cookie::{Cookie, CookieJar, SameSite};
 use serde::Deserialize;
 use time::Duration;
 
-pub const COOKIE_NAME: &str = "admin_auth";
+pub const COOKIE_NAME: &str = "fantasma0_admin_auth";
 
 #[derive(Deserialize)]
 pub struct SignInForm {

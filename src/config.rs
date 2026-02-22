@@ -14,6 +14,7 @@ pub struct ServerConfig {
     pub pow_token_secret: String, //FIXME - make it <redacted>; move to [pow_challenge]
     pub js_token_secret: String,  //FIXME - make it <redacted>
     pub operation_mode: OperationMode,
+    pub log_level: String, //TODO: enum
 
     //these URL-s must not be checked
     pub skip_paths: Vec<String>,

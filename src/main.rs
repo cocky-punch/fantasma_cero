@@ -35,7 +35,7 @@ mod security;
 use crate::security::js_token::JsToken;
 use crate::security::pow_token::PowToken;
 
-const COOKIE_NAME: &str = "fantasma0_verified";
+const POW_COOKIE_NAME: &str = "fantasma0_verified";
 const JS_ENABLED_COOKIE_NAME: &str = "fantasma0_js_ok";
 type HmacSha256 = hmac::Hmac<sha2::Sha256>;
 
@@ -122,7 +122,10 @@ pub struct JsVerifyRequest {
 }
 
 impl AppState {
-    fn new(target_url: String, db_pool: sqlx::SqlitePool) -> Result<Self, Box<dyn std::error::Error>> {
+    fn new(
+        target_url: String,
+        db_pool: sqlx::SqlitePool,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
         let mut tera = Tera::new("html_templates/**/*")?;
         tera.autoescape_on(vec!["html"]);
 
@@ -724,7 +727,7 @@ async fn verify_pow(
         let cookie = PowToken::issue_cookie(
             config::CONFIG.server.pow_token_secret.as_bytes(),
             &client_ip,
-            COOKIE_NAME,
+            POW_COOKIE_NAME,
             ttl_seconds,
         );
 
@@ -816,7 +819,7 @@ async fn validate_handler(State(state): State<AppState>, headers: HeaderMap) -> 
         }
     }
 
-    if let Some(cookie_value) = extract_cookie_value(&headers, COOKIE_NAME) {
+    if let Some(cookie_value) = extract_cookie_value(&headers, POW_COOKIE_NAME) {
         // let is_valid = verification_token::validate_pow_token(
         let is_valid = PowToken::verify(
             config::CONFIG.server.pow_token_secret.as_bytes(),
@@ -938,8 +941,6 @@ fn build_validation_router() -> Router<AppState> {
         // verifications
         .route("/verify_js", post(verify_js))
         .route("/verify_pow", post(verify_pow))
-        // others
-        // .with_state(state)
 }
 
 fn build_validation_with_proxy_router() -> Router<AppState> {
@@ -953,7 +954,6 @@ fn build_validation_with_proxy_router() -> Router<AppState> {
         // .route("/wp-admin", get(honeypot_route))
         .route("/", axum::routing::any(main_handler))
         .route("/{*path}", axum::routing::any(main_handler))
-        // .with_state(state)
 }
 
 #[derive(Debug)]
@@ -968,6 +968,8 @@ enum ValidationDecision {
 
 fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> ValidationDecision {
     let path = req.uri().path();
+    tracing::debug!("[decide_request] for {}", path);
+
     if state.is_url_path_skipped(path) {
         return ValidationDecision::Allow;
     }
@@ -993,12 +995,10 @@ fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> Validati
 
     // ── JS gate (optional) ──────────────────────────────
     if config::CONFIG.server.js_check_enabled {
-        // DEBUG
-        eprintln!(
+        tracing::debug!(
             "[DEBUG] [js_check_enabled] #2; config.js_check_enabled: {}",
             config::CONFIG.server.js_check_enabled
         );
-        //
 
         let Some(cookie_value) = extract_cookie_value(&headers, JS_ENABLED_COOKIE_NAME) else {
             return ValidationDecision::JsChallenge;
@@ -1018,8 +1018,7 @@ fn decide_request(state: &AppState, req: &axum::http::Request<Body>) -> Validati
     }
 
     // ── PoW ──────────────────────────────
-    if let Some(cookie_value) = extract_cookie_value(headers, COOKIE_NAME) {
-        // let is_valid = verification_token::validate_pow_token(
+    if let Some(cookie_value) = extract_cookie_value(headers, POW_COOKIE_NAME) {
         let is_valid = PowToken::verify(
             config::CONFIG.server.pow_token_secret.as_bytes(),
             &cookie_value,
@@ -1048,6 +1047,8 @@ async fn main_handler(
     State(state): State<AppState>,
     req: axum::http::Request<Body>,
 ) -> Response<Body> {
+    tracing::debug!("[main_handler] #1");
+
     let decision = decide_request(&state, &req);
     handle_proxy_mode(&state, decision, req).await
 }
@@ -1143,14 +1144,23 @@ async fn verify_js(
     resp
 }
 
+fn init_tracing() {
+    use tracing_subscriber::{EnvFilter, fmt};
 
+    let filter = EnvFilter::try_new(&config::CONFIG.server.log_level)
+        .unwrap_or_else(|_| EnvFilter::new("info"));
+
+    fmt().with_env_filter(filter).with_target(false).init();
+}
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    tracing_subscriber::fmt::init();
+    // tracing_subscriber::fmt::init();
 
     let _ = dotenvy::dotenv();
     let db_pool = helpers::init_db().await;
+    init_tracing();
+
     let app_state = match AppState::new(config::CONFIG.target.origin_url.clone(), db_pool) {
         Ok(x) => x,
         Err(e) => {
@@ -1170,6 +1180,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let additional_routes = Router::new()
         .route("/health", get(health::health))
         .route("/metrics", get(metrics::metrics))
+        // TODO
         // .route("/feedback_report", post(submit_feedback_report))
     ;
 
@@ -1205,11 +1216,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let app = Router::new()
         .merge(waf_routes)
         .with_state(app_state)
-
         .nest(ADMIN_BACKEND_URL_PREFIX, admin_router)
-        .nest(ADMIN_BACKEND_URL_PREFIX, additional_routes)
-    ;
-
+        .nest(ADMIN_BACKEND_URL_PREFIX, additional_routes);
 
     let port = cli_port()
         .or_else(env_port)
@@ -1218,22 +1226,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let addr = format!("{}:{}", listen_interface, port);
 
-    println!("Fantasma0 Enhanced starting on http://{}", addr);
-    println!("Operation mode: {:?}", config::CONFIG.server.operation_mode);
+    println!("Fantasma0 running on http://{}", addr);
+    println!(
+        "Admin dashboard: http://{}{}",
+        addr,
+        config::CONFIG.admin.base_path_prefix
+    );
+
     println!("Target URL: {}", config::CONFIG.target.origin_url);
-    println!("Features enabled:");
-    println!("  - Dynamic PoW difficulty (base: {})", BASE_DIFFICULTY);
-    println!(
-        "  - Cookie-based tracking ({} days)",
-        config::CONFIG.pow_challenge.cookie_duration_days
-    );
-    println!("  - Behavioral analysis & honeypots");
-    println!(
-        "  - Rate limiting ({} req/{}min)",
-        MAX_REQUESTS_PER_WINDOW, RATE_LIMIT_WINDOW_MINUTES
-    );
-    println!("  - IP reputation tracking");
-    // println!("Admin stats: http://localhost:{}/admin/stats", port);
+    println!("Operation mode: {:?}", config::CONFIG.server.operation_mode);
 
     let listener = TcpListener::bind(&addr).await?;
     axum::serve(listener, app).await?;

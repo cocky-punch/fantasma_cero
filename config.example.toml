@@ -4,6 +4,7 @@ js_check_enabled = true
 js_token_secret = "<some secret value>"
 # validation | validation_with_proxy
 operation_mode = "validation"
+log_level = "info"
 
 skip_paths = [
   "/metrics",
